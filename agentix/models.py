@@ -38,10 +38,6 @@ class ClosureManifest(BaseModel):
         description="Python import path of the closure package, e.g. 'agentix_closures.claude_code'."
     )
     description: str | None = None
-    kind: str | None = Field(
-        default=None,
-        description="Optional, purely informational (e.g. 'agent', 'dataset', 'tool'). Runtime ignores.",
-    )
 
     model_config = {"extra": "allow"}
 

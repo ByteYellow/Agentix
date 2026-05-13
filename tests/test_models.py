@@ -22,7 +22,7 @@ def test_closure_manifest_minimal():
         package="agentix_closures.core",
     )
     assert m.package == "agentix_closures.core"
-    assert m.kind is None
+    assert m.description is None
 
 
 def test_closure_manifest_extra_allow():
@@ -32,11 +32,10 @@ def test_closure_manifest_extra_allow():
             "name": "mock-agent",
             "version": "0.1.0",
             "package": "agentix_closures.mock_agent",
-            "kind": "agent",
             "extra_field": "ignored-but-preserved",
         }
     )
-    assert m.kind == "agent"
+    assert m.name == "mock-agent"
 
 
 def test_closure_manifest_requires_abi_name_version_package():

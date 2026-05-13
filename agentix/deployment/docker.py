@@ -1,23 +1,23 @@
 """Docker deployment: sandbox CRUD via local Docker.
 
-Design (modular Nix-closure composition):
+Design:
 
-  Every closure image declares `VOLUME /nix` and ships:
-      /nix/store/<hash>-*/    — content-addressed Nix deps
-      /nix/entry/bin/start    — no-arg entry point, reads AGENTIX_SOCKET
-                                from env
+  Every closure image declares `VOLUME /nix` and ships under `/nix`:
+      store/<hash>-*/             — content-addressed Nix deps
+      entry/python/<package>/     — Python package the runtime imports
+      entry/manifest.json         — ClosureManifest (abi, package, ...)
+      entry/bin/<cli>             — optional native binaries (exposed via paths_from)
 
-  Deployment's responsibility per unique closure image (cached):
-      docker run --rm -v agentix-closure-<key>:/nix <image> true
-      A fresh named volume mounted at /nix (the image declares VOLUME /nix)
-      is auto-populated by Docker from image-layer content on first attach;
-      subsequent calls are no-ops (Docker's own idempotency).
+  Deployment's responsibility per unique closure image (cached in-process):
+      docker run --rm -v agentix-closure-<digest>:/nix <image> true
+      A fresh named volume mounted at /nix is auto-populated by Docker from
+      the image's /nix layer on first attach (volume-init-from-image rule);
+      subsequent calls are no-ops.
 
   Sandbox create:
       docker run --name <sid> \\
-         -v agentix-closure-<runtime-key>:/mnt/runtime:ro \\
-         -v agentix-closure-<claude-key>:/mnt/claude:ro \\
-         -v agentix-closure-<swebench-key>:/mnt/swebench:ro \\
+         -v agentix-closure-<runtime-digest>:/mnt/runtime:ro \\
+         -v agentix-closure-<closure-digest>:/mnt/c<digest>:ro \\  (per closure)
          --tmpfs /nix:exec,mode=755 \\
          <task-image> sh -c '<entrypoint>'
 
@@ -26,9 +26,10 @@ Design (modular Nix-closure composition):
       for d in /mnt/*/store; do ln -sfn "$d"/* /nix/store/; done
       exec /mnt/runtime/entry/bin/start
 
-  Runtime on startup scans /mnt/*/entry/bin/start, spawns each one as
-  a closure subprocess. No dynamic /load; sandbox contents are fixed at
-  create time.
+  Mount-dir names are internal — the runtime indexes closures by
+  manifest.package, not by directory. On startup the runtime imports each
+  mounted closure's Python package in-process; no subprocesses, no UDS,
+  no reverse proxy. Sandbox contents are fixed at create time.
 """
 
 from __future__ import annotations

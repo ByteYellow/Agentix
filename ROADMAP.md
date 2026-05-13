@@ -2,13 +2,14 @@
 
 ## v0.1.0 — Closure runtime (current)
 
-Run any Nix closure inside a Docker sandbox, compose multiple closures in one sandbox, expose each over HTTP via a reverse proxy.
+Run any Nix closure inside a Docker sandbox as a typed Python module imported in-process by the runtime. Compose multiple closures, dispatch typed calls via `RuntimeClient.remote(fn, ...)`.
 
-- [x] Closure ABI: `VOLUME /nix` + `/nix/store` + `/nix/entry/bin/start`
-- [x] `DockerDeployment` — per-image named volume keyed by image digest, auto-populated by Docker; per-closure `-v /mnt/<ns>:ro` + tmpfs `/nix`; sandbox entrypoint builds the `/nix/store` symlink forest and execs the runtime
-- [x] Runtime server — built-in `exec / upload / download / ls`, `/closures`, streaming reverse proxy `/{ns}/{path*}`
-- [x] Auto-load on startup: runtime scans `/mnt` and forks each closure's `entry/bin/start`
-- [x] Unit tests + Docker smoke test in CI
+- [x] Closure ABI: `VOLUME /nix` + `/nix/store` + `/nix/entry/python/<package>` + `/nix/entry/manifest.json`
+- [x] `DockerDeployment` — per-image named volume keyed by image digest, auto-populated by Docker; per-closure `-v /mnt/c<digest>:ro` + tmpfs `/nix`; sandbox entrypoint builds the `/nix/store` symlink forest and execs the runtime
+- [x] Runtime server — built-in `exec / upload / download`, `/closures`, single typed-dispatch endpoint `POST /_remote`
+- [x] Auto-load on startup: runtime scans `/mnt`, imports each closure's package, calls `<pkg>._register.register()` -> `Dispatcher`
+- [x] Streaming returns via `AsyncIterator[T]` on stubs; wire is NDJSON on the same `/_remote` endpoint
+- [x] Unit tests in CI
 
 Higher-level concepts (agent adapter, dataset runner, benchmark orchestration) are **explicitly out of scope for v0.1.0** and will be revisited once the closure substrate is stable.
 

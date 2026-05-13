@@ -39,23 +39,23 @@ docker build -t agentix/mock-dataset:dev -f tests/closure-docker/Dockerfile test
 ```python
 import asyncio
 from agentix import DockerDeployment, RuntimeClient, SandboxConfig
+from agentix_closures import mock_agent  # typed stubs
 
 async def main():
     deployment = DockerDeployment()
     config = SandboxConfig(
         image="ubuntu:24.04",
         runtime="agentix/runtime:dev",
-        closures={"agent": "agentix/mock-agent:dev"},
+        closures=["agentix/mock-agent:dev"],
     )
     async with deployment.session(config) as sb:
         async with RuntimeClient(sb.runtime_url) as c:
             print(await c.run("uname -a"))
-            print(await c.call("agent", "run", {"instruction": "hi"}))
+            result = await c.remote(mock_agent.run, instruction="hi")
+            print(result.patch)
 
 asyncio.run(main())
 ```
-
-`tests/smoke_docker.py` is the canonical end-to-end script — the CI `e2e` job runs it.
 
 ### Lint & test
 
