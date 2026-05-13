@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import ValidationError
 
 from agentix.models import ClosureInfo, ClosureManifest
 
@@ -105,7 +104,7 @@ class LoadedClosure:
     socket_path: Path
     process: asyncio.subprocess.Process
     client: httpx.AsyncClient
-    manifest: ClosureManifest | None = None
+    manifest: ClosureManifest
     stdout_buf: _RingBuffer = field(default_factory=lambda: _RingBuffer(LOG_BUFFER_BYTES))
     stderr_buf: _RingBuffer = field(default_factory=lambda: _RingBuffer(LOG_BUFFER_BYTES))
     _log_tasks: list[asyncio.Task] = field(default_factory=list)
@@ -120,12 +119,15 @@ class ClosureLoader:
 
     # ── load / unload ────────────────────────────────────────────
 
-    async def load(self, namespace: str) -> LoadedClosure:
+    async def load(self, namespace: str, *, manifest: ClosureManifest) -> LoadedClosure:
         """Spawn a closure process from /mnt/<namespace>/entry/bin/start.
 
         The deployment has mounted the closure's /nix volume at
-        `/mnt/<namespace>`. The loader finds the start binary, prepends
-        the entry dir's bin to PATH, hands the socket path via env, and forks.
+        `/mnt/<namespace>`. The caller has already read and validated
+        `entry/manifest.json` (that is the contract that marks a mount as a
+        closure); the loader trusts it and just forks `entry/bin/start`,
+        prepending the entry dir's bin to PATH and handing the socket path
+        via env.
         """
         if namespace in self._closures:
             logger.warning("Closure '%s' already loaded, unloading first", namespace)
@@ -168,6 +170,7 @@ class ClosureLoader:
             socket_path=socket_path,
             process=proc,
             client=None,  # set below
+            manifest=manifest,
         )
 
         async def _drain(stream: asyncio.StreamReader, buf: _RingBuffer, tag: str) -> None:
@@ -201,34 +204,20 @@ class ClosureLoader:
         transport = httpx.AsyncHTTPTransport(uds=str(socket_path))
         closure.client = httpx.AsyncClient(transport=transport, base_url="http://closure", timeout=None)
 
-        # Manifest probe (also a readiness check)
-        manifest_raw: dict | None = None
+        # Readiness probe — socket existing isn't enough; the HTTP server may
+        # not yet be accepting. Any non-5xx response on `/` counts as ready.
+        # Manifest itself already came from the in-image file; we don't reparse
+        # the response body.
         for _ in range(50):  # ~5s
             try:
                 r = await closure.client.get("/")
                 if r.status_code < 500:
-                    try:
-                        manifest_raw = r.json()
-                    except Exception:
-                        manifest_raw = None
                     break
             except (httpx.ConnectError, httpx.ReadError):
                 await asyncio.sleep(0.1)
         else:
             await self._cleanup(closure)
             raise TimeoutError(f"Closure '{namespace}' not responding on socket")
-
-        if isinstance(manifest_raw, dict):
-            try:
-                closure.manifest = ClosureManifest.model_validate(manifest_raw)
-            except ValidationError as exc:
-                logger.warning("Closure '%s' manifest failed validation (kept as-is): %s", namespace, exc)
-                closure.manifest = ClosureManifest(
-                    name=manifest_raw.get("name", namespace),
-                    version=manifest_raw.get("version", "0.0.0"),
-                    description=manifest_raw.get("description"),
-                    kind=manifest_raw.get("kind"),
-                )
 
         self._closures[namespace] = closure
         logger.info("Closure '%s' loaded (manifest=%s)", namespace, closure.manifest)

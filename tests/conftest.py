@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import stat
@@ -10,6 +11,8 @@ import textwrap
 from pathlib import Path
 
 import pytest
+
+from agentix.models import AGENTIX_CLOSURE_ABI, ClosureManifest
 
 
 @pytest.fixture
@@ -68,9 +71,28 @@ def mount_closure(mount_root: Path):
 
 
 @pytest.fixture
-def echo_closure(tmp_path: Path) -> Path:
+def echo_manifest() -> ClosureManifest:
+    """The ClosureManifest that echo_closure ships in its image-time manifest.json.
+    Tests pass this when calling loader.load(...) directly (auto-load reads it
+    from disk via _read_manifest()).
+    """
+    return ClosureManifest(
+        abi=AGENTIX_CLOSURE_ABI,
+        name="echo",
+        version="0.0.1",
+        kind="tool",
+        endpoints=[
+            {"method": "GET", "path": "/", "description": "manifest"},
+            {"method": "POST", "path": "/echo"},
+        ],
+    )
+
+
+@pytest.fixture
+def echo_closure(tmp_path: Path, echo_manifest: ClosureManifest) -> Path:
     """Build an ephemeral Python closure directory that:
-    - exposes GET / with manifest
+    - ships manifest.json at the closure root (mounted as entry/manifest.json)
+    - exposes GET / serving the same manifest dict (readiness probe)
     - exposes POST /echo returning request body
     Entry point is `bin/start`, an in-tree Python script using stdlib http.server
     (no FastAPI dep needed in the test env). Reads AGENTIX_SOCKET from env —
@@ -78,6 +100,7 @@ def echo_closure(tmp_path: Path) -> Path:
     """
     closure = tmp_path / "echo-closure"
     (closure / "bin").mkdir(parents=True)
+    (closure / "manifest.json").write_text(echo_manifest.model_dump_json())
     script = closure / "bin" / "start"
     script.write_text(
         textwrap.dedent(

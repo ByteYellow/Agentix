@@ -1,7 +1,7 @@
 """Agentix runtime server.
 
 The runtime server bundles:
-  - built-in operations (exec/upload/download/ls) mounted at root
+  - built-in operations (exec/upload/download) mounted at root
   - a closure loader + streaming reverse proxy for closures already mounted
 
 Closures are static per sandbox: the deployment has mounted each closure at
@@ -19,9 +19,15 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
 from agentix import __version__
-from agentix.models import HealthResponse, LogsResponse
+from agentix.models import (
+    AGENTIX_CLOSURE_ABI,
+    ClosureManifest,
+    HealthResponse,
+    LogsResponse,
+)
 from agentix.runtime.builtins import router as builtins_router
 from agentix.runtime.loader import CLOSURE_MOUNT_ROOT, ClosureLoader
 
@@ -41,20 +47,49 @@ loader = ClosureLoader()
 async def _auto_load() -> None:
     """Scan /mnt for mounted closures and fork each one.
 
-    The runtime itself is mounted at /mnt/runtime; skip it. Any other
-    /mnt/<ns>/entry/bin/start is a closure the deployment arranged, and
-    should be running. Failure here surfaces as a sandbox startup failure.
+    A `/mnt/<ns>` directory is a closure iff `entry/manifest.json` parses as a
+    ClosureManifest with `abi == AGENTIX_CLOSURE_ABI`. Missing/invalid/wrong-abi
+    manifests are skipped with a warning so non-closure mounts (caches, task
+    data) can coexist under /mnt without tripping discovery.
+
+    The runtime itself is mounted at /mnt/runtime; skip it.
     """
     if not CLOSURE_MOUNT_ROOT.is_dir():
         return
     for ns_dir in sorted(CLOSURE_MOUNT_ROOT.iterdir()):
         if ns_dir.name == "runtime" or not ns_dir.is_dir():
             continue
-        start = ns_dir / "entry" / "bin" / "start"
-        if not (start.exists() and os.access(start, os.X_OK)):
+        manifest = _read_manifest(ns_dir)
+        if manifest is None:
             continue
-        await loader.load(ns_dir.name)
-        logger.info("Auto-loaded closure '%s'", ns_dir.name)
+        await loader.load(ns_dir.name, manifest=manifest)
+        logger.info("Auto-loaded closure '%s' (manifest=%s)", ns_dir.name, manifest.name)
+
+
+def _read_manifest(ns_dir) -> ClosureManifest | None:
+    """Read and validate /mnt/<ns>/entry/manifest.json. Returns None if the
+    directory is not a closure (or carries an incompatible one).
+    """
+    mf_path = ns_dir / "entry" / "manifest.json"
+    if not mf_path.is_file():
+        logger.warning("skip %s: missing entry/manifest.json", ns_dir.name)
+        return None
+    try:
+        manifest = ClosureManifest.model_validate_json(mf_path.read_text())
+    except ValidationError as exc:
+        logger.error("skip %s: invalid manifest.json: %s", ns_dir.name, exc)
+        return None
+    if manifest.abi != AGENTIX_CLOSURE_ABI:
+        logger.warning(
+            "skip %s: abi=%d, runtime supports %d",
+            ns_dir.name, manifest.abi, AGENTIX_CLOSURE_ABI,
+        )
+        return None
+    start = ns_dir / "entry" / "bin" / "start"
+    if not (start.exists() and os.access(start, os.X_OK)):
+        logger.error("skip %s: manifest valid but %s is not executable", ns_dir.name, start)
+        return None
+    return manifest
 
 
 @asynccontextmanager

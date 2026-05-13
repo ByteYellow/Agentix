@@ -4,11 +4,14 @@
 # image satisfies the closure convention:
 #
 #   * VOLUME /nix
-#   * /nix/store/<hash>-*/     — Nix store deps
-#   * /nix/entry/bin/start     — executable entry point (no CLI args)
+#   * /nix/store/<hash>-*/        — Nix store deps
+#   * /nix/entry/bin/start        — executable entry point (no CLI args)
+#   * /nix/entry/manifest.json    — ClosureManifest, abi=1
 #
 # The `start` binary is invoked with no arguments; the runtime sets
 # AGENTIX_SOCKET (path to the Unix socket to bind) in its environment.
+# `manifest.json` is what marks /mnt/<ns> as a closure — without it the
+# runtime ignores the mount.
 #
 # Build: docker build -t my-closure:1.0 -f <path>/Dockerfile ./my-closure
 

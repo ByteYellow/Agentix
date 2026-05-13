@@ -1,4 +1,4 @@
-"""Tests for the runtime server's built-in endpoints: exec/upload/download/ls.
+"""Tests for the runtime server's built-in endpoints: exec/upload/download.
 
 These endpoints live on the runtime directly (no closure load required),
 so we drive them through an ASGI transport on the real FastAPI app.
@@ -84,7 +84,7 @@ async def test_exec_scrubs_nix_env(builtins_app, monkeypatch: pytest.MonkeyPatch
         assert "NIX=\n" in body["stdout"] or "NIX= " in body["stdout"]
 
 
-async def test_upload_download_ls_round_trip(builtins_app):
+async def test_upload_download_round_trip(builtins_app):
     server, root = builtins_app
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
@@ -98,17 +98,14 @@ async def test_upload_download_ls_round_trip(builtins_app):
         assert r.json() == {"path": str(target), "size": 11}
         assert target.read_bytes() == b"hello world"
 
-        r = await http.get("/ls", params={"path": str(root / "sub")})
-        assert r.status_code == 200
-        names = [e["name"] for e in r.json()]
-        assert names == ["hello.txt"]
-
         r = await http.get("/download", params={"path": str(target)})
         assert r.status_code == 200
         assert r.content == b"hello world"
 
 
-async def test_exec_paths_from_prepends_closure_bin(builtins_app, echo_closure: Path, mount_closure):
+async def test_exec_paths_from_prepends_closure_bin(
+    builtins_app, echo_closure: Path, echo_manifest, mount_closure
+):
     """`paths_from=[ns]` prepends /mnt/<ns>/entry/bin to PATH."""
     server, _root = builtins_app
 
@@ -119,7 +116,7 @@ async def test_exec_paths_from_prepends_closure_bin(builtins_app, echo_closure: 
 
     mount_closure(echo_closure, "echo")
     loader = server.loader
-    await loader.load("echo")
+    await loader.load("echo", manifest=echo_manifest)
     try:
         transport = httpx.ASGITransport(app=server.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:

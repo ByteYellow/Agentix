@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agentix.models import (
+    AGENTIX_CLOSURE_ABI,
     ClosureManifest,
     Endpoint,
     SandboxConfig,
@@ -12,7 +13,7 @@ from agentix.models import (
 
 
 def test_closure_manifest_minimal():
-    m = ClosureManifest(name="core", version="0.1.0")
+    m = ClosureManifest(abi=AGENTIX_CLOSURE_ABI, name="core", version="0.1.0")
     assert m.endpoints == []
     assert m.kind is None
 
@@ -20,6 +21,7 @@ def test_closure_manifest_minimal():
 def test_closure_manifest_full():
     m = ClosureManifest.model_validate(
         {
+            "abi": AGENTIX_CLOSURE_ABI,
             "name": "mock-agent",
             "version": "0.1.0",
             "kind": "agent",
@@ -31,6 +33,11 @@ def test_closure_manifest_full():
     assert m.name == "mock-agent"
     assert m.kind == "agent"
     assert m.endpoints == [Endpoint(method="POST", path="/run")]
+
+
+def test_closure_manifest_abi_required():
+    with pytest.raises(Exception):
+        ClosureManifest(name="x", version="0.0.0")  # type: ignore[call-arg]
 
 
 def test_sandbox_config_simple():

@@ -6,6 +6,5 @@ __pycache__
 tests/
 docs/
 examples/
-templates/closure-docker/README.md
 CLAUDE.md
 ROADMAP.md

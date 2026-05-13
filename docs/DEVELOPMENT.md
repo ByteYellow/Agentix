@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Python 3.11+
-- [Docker](https://docs.docker.com/get-docker/) — the only host requirement. Nix runs inside the builder stage of `templates/closure-docker/Dockerfile`.
+- [Docker](https://docs.docker.com/get-docker/) — the only host requirement. Nix runs inside the builder stage of `tests/closure-docker/Dockerfile`.
 
 ## Setup
 
@@ -22,16 +22,16 @@ agentix-server                 # http://localhost:8000
 agentix-server --port 9000
 ```
 
-Without any closures mounted, the server exposes its built-ins (`/health`, `/exec`, `/upload`, `/download`, `/ls`). Useful for iterating on the runtime without the Docker round-trip.
+Without any closures mounted, the server exposes its built-ins (`/health`, `/exec`, `/upload`, `/download`). Useful for iterating on the runtime without the Docker round-trip.
 
 ### Build closures
 
-Every image — runtime and closures — builds with the same template:
+The repo's runtime and mock closures share one Dockerfile:
 
 ```bash
-docker build -t agentix/runtime:dev      -f templates/closure-docker/Dockerfile .
-docker build -t agentix/mock-agent:dev   -f templates/closure-docker/Dockerfile tests/closures/mock-agent
-docker build -t agentix/mock-dataset:dev -f templates/closure-docker/Dockerfile tests/closures/mock-dataset
+docker build -t agentix/runtime:dev      -f tests/closure-docker/Dockerfile .
+docker build -t agentix/mock-agent:dev   -f tests/closure-docker/Dockerfile tests/closures/mock-agent
+docker build -t agentix/mock-dataset:dev -f tests/closure-docker/Dockerfile tests/closures/mock-dataset
 ```
 
 ### Smoke-test end-to-end in Docker
@@ -47,7 +47,7 @@ async def main():
         runtime="agentix/runtime:dev",
         closures={"agent": "agentix/mock-agent:dev"},
     )
-    async with deployment.create(config) as sb:
+    async with deployment.session(config) as sb:
         async with RuntimeClient(sb.runtime_url) as c:
             print(await c.run("uname -a"))
             print(await c.call("agent", "run", {"instruction": "hi"}))
@@ -67,12 +67,13 @@ pytest -x                   # stop on first failure
 
 ## Adding a new closure
 
-Everything inside the sandbox is a closure. Copy a reference:
+Everything inside the sandbox is a closure. Copy a reference and write your own Dockerfile:
 
 ```bash
 cp -r tests/closures/mock-agent my-closure
 # edit my-closure/default.nix and the source package for your logic
-docker build -t my-closure:0.1.0 -f templates/closure-docker/Dockerfile ./my-closure
+# author my-closure/Dockerfile (see tests/closure-docker/Dockerfile for a working reference)
+docker build -t my-closure:0.1.0 ./my-closure
 ```
 
 Use it:
@@ -85,4 +86,4 @@ SandboxConfig(
 )
 ```
 
-See `docs/closure-protocol.md` for the closure ABI and `templates/closure-docker/README.md` for the Dockerfile contract.
+See `docs/closure-protocol.md` for the closure ABI.

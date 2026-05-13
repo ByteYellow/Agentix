@@ -43,7 +43,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: templates/closure-docker/Dockerfile
+          file: tests/closure-docker/Dockerfile
           tags: agentix/runtime:ci
           load: true
           cache-from: type=gha,scope=runtime
@@ -53,7 +53,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: tests/closures/mock-agent
-          file: templates/closure-docker/Dockerfile
+          file: tests/closure-docker/Dockerfile
           tags: agentix/mock-agent:ci
           load: true
           cache-from: type=gha,scope=mock-agent
@@ -63,7 +63,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: tests/closures/mock-dataset
-          file: templates/closure-docker/Dockerfile
+          file: tests/closure-docker/Dockerfile
           tags: agentix/mock-dataset:ci
           load: true
           cache-from: type=gha,scope=mock-dataset

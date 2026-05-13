@@ -120,7 +120,7 @@ class DockerDeployment(Deployment):
 
     # ── create ───────────────────────────────────────────────────
 
-    async def _create(self, config: SandboxConfig) -> Sandbox:
+    async def create(self, config: SandboxConfig) -> Sandbox:
         if "runtime" in config.closures:
             raise ValueError("namespace 'runtime' is reserved for config.runtime")
 

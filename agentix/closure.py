@@ -21,7 +21,10 @@ For local dev without a sandbox, pass `socket_path=` explicitly:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
+
+from agentix.models import AGENTIX_CLOSURE_ABI, ClosureManifest, Endpoint
 
 
 def serve(app: Any, *, socket_path: str | None = None, **uvicorn_kwargs: Any) -> None:
@@ -38,3 +41,37 @@ def serve(app: Any, *, socket_path: str | None = None, **uvicorn_kwargs: Any) ->
             "AGENTIX_SOCKET not set; pass socket_path=... for local dev"
         )
     uvicorn.run(app, uds=sock, **uvicorn_kwargs)
+
+
+def write_manifest(
+    entry_dir: str | os.PathLike[str],
+    *,
+    name: str,
+    version: str,
+    description: str | None = None,
+    kind: str | None = None,
+    endpoints: list[Endpoint] | list[dict[str, Any]] | None = None,
+) -> Path:
+    """Emit `<entry_dir>/manifest.json` for a closure image build.
+
+    Call this from your closure's build script (Dockerfile RUN, nix
+    `runCommand`, Makefile, whatever) so the final image carries the file
+    at `/nix/entry/manifest.json`. The runtime reads this file to identify
+    `/mnt/<ns>` as a closure and to know what ABI it speaks.
+
+    Returns the path written. Raises if `entry_dir` does not exist.
+    """
+    entry = Path(entry_dir)
+    if not entry.is_dir():
+        raise FileNotFoundError(f"entry_dir does not exist: {entry}")
+    manifest = ClosureManifest(
+        abi=AGENTIX_CLOSURE_ABI,
+        name=name,
+        version=version,
+        description=description,
+        kind=kind,
+        endpoints=[Endpoint.model_validate(e) for e in (endpoints or [])],
+    )
+    out = entry / "manifest.json"
+    out.write_text(manifest.model_dump_json())
+    return out

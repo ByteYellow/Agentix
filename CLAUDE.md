@@ -20,11 +20,14 @@ The inspiration: a single `/nix` Docker volume can be mounted into any task cont
 
 Every closure image satisfies exactly:
 
-- `VOLUME /nix`
+- `VOLUME /nix` — required by the docker deployment's volume-init-from-image populate step
 - `/nix/store/<hash>-*/` — content-addressed Nix deps
 - `/nix/entry/bin/start` — executable entry point
+- `/nix/entry/manifest.json` — `ClosureManifest` JSON with `abi == AGENTIX_CLOSURE_ABI`
 
 `start` takes no CLI args. Runtime passes `AGENTIX_SOCKET` (path to the Unix socket to bind) via env.
+
+`manifest.json` is the marker that identifies a `/mnt/<ns>` mount as a closure — without it the runtime ignores the directory, leaving `/mnt` available for non-closure mounts (task data, caches). Validates against `agentix.models.ClosureManifest`; abi mismatches are skipped with a warning. Use `agentix.closure.write_manifest(...)` from your build script to emit it.
 
 The runtime's own "closure" is just another image satisfying the same convention; its `start` launches `agentix-server`.
 
@@ -37,9 +40,11 @@ The runtime's own "closure" is just another image satisfying the same convention
   runtime/                — -v agentix-closure-<runtime-key>:/mnt/runtime:ro
     store/<hash>-*/
     entry/bin/start       — agentix-server
+    entry/manifest.json
   <ns>/                   — -v agentix-closure-<closure-key>:/mnt/<ns>:ro
     store/<hash>-*/
     entry/bin/start
+    entry/manifest.json
 ```
 
 Sandbox entrypoint (inlined into the `docker run` command):

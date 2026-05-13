@@ -8,14 +8,14 @@ v0.1.0 ships exactly three concerns:
 2. A **runtime server** — one process per sandbox that provides sandbox I/O and reverse-proxies to each closure.
 3. A **Docker deployment** — packages closures into named volumes, assembles sandboxes, starts the runtime.
 
-Higher-level abstractions (agent / dataset / benchmark interfaces) are deliberately **not** in this release; see [`ROADMAP.md`](../ROADMAP.md).
+See [`ROADMAP.md`](../ROADMAP.md) for what comes later.
 
 ## Components
 
 ```
 ┌─ Host (orchestrator) ─────────────────────────────────────────┐
 │  RuntimeClient                                                 │
-│    • exec / upload / download / ls    (runtime built-ins)      │
+│    • run / upload / download           (runtime built-ins)     │
 │    • closures / logs                   (introspection)         │
 │    • call(namespace, endpoint, data)   (any mounted closure)   │
 └──────────────────────────────┬─────────────────────────────────┘
@@ -27,7 +27,7 @@ Higher-level abstractions (agent / dataset / benchmark interfaces) are deliberat
 │      GET  /health                                               │
 │      POST /exec     (SSE or JSON)                               │
 │      POST /upload                                               │
-│      GET  /download, /ls                                        │
+│      GET  /download                                             │
 │    closure introspection:                                       │
 │      GET  /closures, /closures/{ns}/logs                        │
 │    streaming reverse proxy:                                     │
@@ -42,7 +42,7 @@ Higher-level abstractions (agent / dataset / benchmark interfaces) are deliberat
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Closures are fixed at sandbox creation. There is no dynamic `/load`; the runtime's lifespan scans `/mnt` and forks every closure it finds.
+The runtime's lifespan scans `/mnt` at startup and forks each closure it finds. Closures are fixed for the sandbox's lifetime; change the set by recreating the sandbox.
 
 ## Closure convention
 
@@ -50,8 +50,9 @@ A closure is a Docker image that declares `VOLUME /nix` and carries:
 
 - `/nix/store/<hash>-*/` — content-addressed Nix dependencies (the transitive closure)
 - `/nix/entry/bin/start` — executable entry point (no CLI args)
+- `/nix/entry/manifest.json` — `ClosureManifest` with `abi == AGENTIX_CLOSURE_ABI`; the marker that identifies the mount as a closure
 
-The `start` binary reads `AGENTIX_SOCKET` from env and binds a local HTTP server on that Unix socket. It MAY expose a `GET /` manifest (used by the runtime loader for discovery; optional). Everything else — routes, request schemas, streaming semantics — is the closure's choice; the runtime just proxies bytes.
+The `start` binary reads `AGENTIX_SOCKET` from env and binds a local HTTP server on that Unix socket. It SHOULD expose `GET /` returning the same manifest JSON — the runtime probes it only as a readiness signal. Everything else — routes, request schemas, streaming semantics — is the closure's choice; the runtime just proxies bytes.
 
 See [`closure-protocol.md`](closure-protocol.md) for the full ABI.
 
@@ -95,7 +96,7 @@ The runtime is a Nix-built binary, so `os.environ` is loaded with Nix-runtime pa
 Rules at every `/exec` and closure fork:
 
 1. **Strip Nix-host-only env vars** — `LD_LIBRARY_PATH`, `LD_PRELOAD`, `PYTHONPATH`, `PYTHONHOME`, `LOCALE_ARCHIVE`, `FONTCONFIG_*`, `SSL_CERT_FILE`, anything prefixed `NIX_`.
-2. **PATH defaults to the task image's default** (`/usr/local/bin:/usr/bin:/bin`). A closure's bundled `ripgrep`/`python`/`node` does **not** shadow the same names in the task image.
+2. **PATH defaults to the task image's default** (`/usr/local/bin:/usr/bin:/bin`). Task-image tools take precedence over closure-bundled tools of the same name.
 3. **Closures invoke their own tools by absolute `/nix/store` path** — what well-formed Nix builds already produce via shebangs and wrappers.
 
 When a closure is forked, PATH is prepended with `/mnt/<ns>/entry/bin` so the closure's own shell-outs resolve to its bundled tools first.
@@ -125,15 +126,13 @@ docker run -d \
 
 ## Design decisions
 
-- **Unix sockets, not stdin/stdout** — no interleaving with logs; any HTTP stack works.
-- **HTTP, not gRPC** — curl-debuggable; any language can expose a server.
+- **Unix sockets over HTTP** — every HTTP stack works out of the box; curl-debuggable; logs stay clean.
 - **Process per closure** — isolation, independent crashes, independent deps.
 - **Runtime forwards bytes verbatim** — closures own their wire schemas; streaming (SSE, chunked) works end-to-end.
-- **Static closure set per sandbox** — no dynamic `/load`/`/unload`; to change closures, recreate the sandbox.
-- **Built-in sandbox I/O on the runtime** — exec/upload/download/ls always available, one less closure to compose.
+- **Static closure set per sandbox** — change the set by recreating the sandbox.
+- **Built-in sandbox I/O on the runtime** — run / upload / download always available.
 
-## Non-goals
+## Out of scope (v0.1.0)
 
 - Bearer-token auth on the runtime (sandbox-level trust assumed).
-- Dynamic closure load/unload.
-- Higher-level interfaces for agents / datasets / benchmarks (deferred past v0.1.0).
+- Higher-level interfaces for agents / datasets / benchmarks — see [`ROADMAP.md`](../ROADMAP.md).

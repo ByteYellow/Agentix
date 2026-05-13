@@ -6,11 +6,14 @@ runtime scans /mnt and auto-loads on startup. No HTTP /load.
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from pydantic import BaseModel, Field
 
-# ── Closure manifest (returned by closure's GET /) ────────────────
+# ── Closure manifest (shipped inside the closure image) ───────────
+
+AGENTIX_CLOSURE_ABI = 1
+"""Protocol version of the closure convention. Runtime ignores closures whose
+manifest declares a different value, so bumping this is how we cut a hard
+break in the convention (path layout, manifest schema, fork ABI, etc.)."""
 
 
 class Endpoint(BaseModel):
@@ -20,6 +23,13 @@ class Endpoint(BaseModel):
 
 
 class ClosureManifest(BaseModel):
+    """Static metadata shipped at `/nix/entry/manifest.json` inside a closure
+    image, also the shape returned by the closure's `GET /` for orchestrator
+    introspection. Presence of this file is what marks a `/mnt/<ns>` mount
+    as an Agentix closure — runtime ignores anything without one.
+    """
+
+    abi: int
     name: str
     version: str
     description: str | None = None
@@ -86,13 +96,6 @@ class ExecResponse(BaseModel):
 class UploadResponse(BaseModel):
     path: str
     size: int
-
-
-class LsEntry(BaseModel):
-    name: str
-    is_dir: bool
-    size: int
-    mtime: datetime
 
 
 # ── Deployment ────────────────────────────────────────────────────

@@ -2,9 +2,9 @@
 verify the layout and the reverse-proxy path.
 
 Run locally with the dev images:
-    docker build -t agentix/runtime:dev      -f templates/closure-docker/Dockerfile .
-    docker build -t agentix/mock-agent:dev   -f templates/closure-docker/Dockerfile tests/closures/mock-agent
-    docker build -t agentix/mock-dataset:dev -f templates/closure-docker/Dockerfile tests/closures/mock-dataset
+    docker build -t agentix/runtime:dev      -f tests/closure-docker/Dockerfile .
+    docker build -t agentix/mock-agent:dev   -f tests/closure-docker/Dockerfile tests/closures/mock-agent
+    docker build -t agentix/mock-dataset:dev -f tests/closure-docker/Dockerfile tests/closures/mock-dataset
     python tests/smoke_docker.py
 
 Override image refs via env:
@@ -31,7 +31,7 @@ async def main() -> None:
         runtime=RUNTIME_IMAGE,
         closures={"agent": AGENT_IMAGE, "dataset": DATASET_IMAGE},
     )
-    async with deployment.create(config) as sb:
+    async with deployment.session(config) as sb:
         async with RuntimeClient(sb.runtime_url) as c:
             # /mnt should have runtime + both closures
             r = await c.run("ls /mnt")

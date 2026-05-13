@@ -1,6 +1,6 @@
 """Async HTTP client for the agentix runtime server.
 
-Wraps the runtime's built-in endpoints (run/upload/download/ls, /closures,
+Wraps the runtime's built-in endpoints (run/upload/download, /closures,
 /closures/{ns}/logs) as typed helpers, plus the generic
 `call(namespace, endpoint, ...)` for any closure in the sandbox.
 Closures are baked into the sandbox at create time — no /load/unload.
@@ -21,7 +21,6 @@ from agentix.models import (
     ExecResponse,
     HealthResponse,
     LogsResponse,
-    LsEntry,
     UploadResponse,
 )
 
@@ -191,11 +190,6 @@ class RuntimeClient:
         lp.parent.mkdir(parents=True, exist_ok=True)
         lp.write_bytes(r.content)
         return len(r.content)
-
-    async def ls(self, path: str) -> list[LsEntry]:
-        r = await self._client.get("/ls", params={"path": path})
-        r.raise_for_status()
-        return [LsEntry.model_validate(e) for e in r.json()]
 
 
 def _parse_sse_event(raw: bytes) -> dict[str, Any] | None:

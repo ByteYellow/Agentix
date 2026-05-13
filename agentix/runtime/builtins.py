@@ -1,9 +1,10 @@
-"""Runtime built-ins — exec / upload / download / ls.
+"""Runtime built-ins — exec / upload / download.
 
 Mounted at the runtime server's root. These are the minimum set of
 operations an orchestrator needs to drive a sandbox (run commands, place
 files, fetch results) independent of any closure that happens to be
-mounted.
+mounted. Directory listing and any other file inspection is done via
+`/exec` (e.g. `ls -la`, `find`, `stat`).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from agentix.models import ExecRequest, ExecResponse, LsEntry, UploadResponse
+from agentix.models import ExecRequest, ExecResponse, UploadResponse
 
 UPLOAD_ROOT = Path(os.environ.get("AGENTIX_UPLOAD_ROOT", "/workspace")).resolve()
 MAX_OUTPUT_BYTES = int(os.environ.get("AGENTIX_MAX_OUTPUT_BYTES", str(10 * 1024 * 1024)))
@@ -250,27 +251,3 @@ async def download(path: str):
                 yield chunk
 
     return StreamingResponse(_iter(), media_type="application/octet-stream")
-
-
-@router.get("/ls", response_model=list[LsEntry])
-async def ls(path: str) -> list[LsEntry]:
-    p = _resolve_within(path)
-    if not p.exists():
-        raise HTTPException(status_code=404, detail=f"Not found: {path}")
-    if not p.is_dir():
-        raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
-    entries: list[LsEntry] = []
-    for child in sorted(p.iterdir()):
-        try:
-            st = child.stat()
-            entries.append(
-                LsEntry(
-                    name=child.name,
-                    is_dir=child.is_dir(),
-                    size=st.st_size,
-                    mtime=st.st_mtime,
-                )
-            )
-        except OSError:
-            continue
-    return entries

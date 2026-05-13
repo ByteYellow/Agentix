@@ -12,7 +12,7 @@ from agentix.models import SandboxConfig, SandboxInfo
 
 @dataclass
 class Sandbox:
-    """Live sandbox handle — runtime_url is what RuntimeClient connects to."""
+    """Live sandbox handle — `runtime_url` is what `RuntimeClient` connects to."""
 
     sandbox_id: str
     runtime_url: str
@@ -23,32 +23,38 @@ class Deployment(ABC):
     """Sandbox lifecycle management.
 
     Each infrastructure backend (Docker, K8s, Modal, ...) implements this
-    interface. The orchestrator doesn't care which one is used.
+    interface.
 
-    Typical usage:
+    Two ways to use a sandbox:
 
-        deployment = DockerDeployment()
-        async with deployment.create(config) as sandbox:
+        # Scoped — deleted on context exit
+        async with deployment.session(config) as sandbox:
             ...
-        # sandbox is deleted on context exit
+
+        # Manual — caller owns the lifetime
+        sandbox = await deployment.create(config)
+        try:
+            ...
+        finally:
+            await deployment.delete(sandbox.sandbox_id)
     """
 
     @abstractmethod
-    async def _create(self, config: SandboxConfig) -> Sandbox:
-        """Backend-specific create. Users should use `create()` (context manager) instead."""
+    async def create(self, config: SandboxConfig) -> Sandbox:
+        """Create a sandbox. The caller is responsible for calling `delete()`."""
 
     @abstractmethod
     async def delete(self, sandbox_id: str) -> None:
-        """Destroy sandbox and release resources."""
+        """Destroy a sandbox and release its resources."""
 
     @abstractmethod
     async def get(self, sandbox_id: str) -> SandboxInfo:
         """Snapshot of the sandbox's current state."""
 
     @asynccontextmanager
-    async def create(self, config: SandboxConfig) -> AsyncIterator[Sandbox]:
-        """Create a sandbox scoped to this context; delete on exit."""
-        sandbox = await self._create(config)
+    async def session(self, config: SandboxConfig) -> AsyncIterator[Sandbox]:
+        """Scoped sandbox: created on entry, deleted on exit."""
+        sandbox = await self.create(config)
         try:
             yield sandbox
         finally:
