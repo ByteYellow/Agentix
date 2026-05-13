@@ -143,7 +143,7 @@ User subprocess default `PATH=/usr/local/bin:/usr/bin:/bin` (task image's). Nix 
 
 ## Implementation notes
 
-- **Hash paths are internal.** Users pass Docker image refs in `SandboxConfig.closures` (list of refs, not a dict). Mount-dir names are deployment-internal (`/mnt/c<digest>`); the runtime indexes by `manifest.package`.
+- **Hash paths are internal.** Users pass docker image refs in `SandboxConfig.closures` — either as strings or as the closure's imported Python package (which exposes `__image__` for resolution). Mount-dir names are deployment-internal (`/mnt/c<digest>`); the runtime indexes by `manifest.package`.
 - **No local Nix required.** Closure authors do `docker build`; Nix lives in the builder stage of their Dockerfile.
 - **Closure Python deps stay thin.** Closures share the runtime's Python interpreter — Python wrappers should depend on stdlib + the `agentix` package itself (which already brings pydantic). Heavy deps belong in Nix-bundled native binaries, not in `pyproject.toml`.
 - **Sandbox starts fast.** Warm sandbox is `-v` mounts + tmpfs + symlink loop (shell-time, ~100 ms) + import of each closure package (typically tens of ms each).

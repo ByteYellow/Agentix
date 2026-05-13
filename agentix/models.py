@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ── Closure manifest (shipped inside the closure image) ───────────
 
@@ -130,11 +130,38 @@ class SandboxConfig(BaseModel):
     runtime: str = Field(description="Runtime closure image ref")
     closures: list[str] = Field(
         default_factory=list,
-        description="Closures to mount, by image ref. Each closure's identity "
-        "comes from its manifest's `package` field — there are no caller-chosen "
-        "namespaces. Two images shipping the same package collide and the second "
-        "is skipped with a warning.",
+        description=(
+            "Closures to mount. Accepts docker image refs (strings) or any object "
+            "exposing a string `__image__` attribute — typically the closure's "
+            "imported Python package, e.g. `closures=[claude_code, mock_agent]`. "
+            "Modules are resolved to their `__image__` at validation; the stored "
+            "list is always strings. Each closure's runtime identity still comes "
+            "from its manifest's `package` field — there are no caller-chosen "
+            "namespaces."
+        ),
     )
+
+    @field_validator("closures", mode="before")
+    @classmethod
+    def _resolve_closure_specs(cls, v: Any) -> Any:
+        """Accept ``list[str | <obj with __image__>]`` and normalise to list[str]."""
+        if not isinstance(v, list):
+            return v  # pydantic will reject below
+        out: list[str] = []
+        for item in v:
+            if isinstance(item, str):
+                out.append(item)
+                continue
+            img = getattr(item, "__image__", None)
+            if isinstance(img, str) and img:
+                out.append(img)
+                continue
+            raise ValueError(
+                f"closure spec {item!r} must be a docker-image-ref string or "
+                f"an object with a non-empty string `__image__` attribute "
+                f"(e.g. a closure's Python package module)"
+            )
+        return out
     env: dict[str, str] | None = Field(
         default=None,
         description=(

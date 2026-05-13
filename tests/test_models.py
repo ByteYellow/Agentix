@@ -79,3 +79,40 @@ def test_sandbox_config_default_closures_empty():
 def test_sandbox_config_requires_runtime():
     with pytest.raises(Exception):
         SandboxConfig(image="ubuntu:24.04")  # type: ignore[call-arg]
+
+
+def test_sandbox_config_resolves_closures_from_module():
+    """Modules with __image__ get resolved to their image ref string."""
+    import types
+
+    mod = types.ModuleType("agentix_closures.fake")
+    mod.__image__ = "fake/img:1.0"
+    cfg = SandboxConfig(
+        image="ubuntu:24.04",
+        runtime="agentix/runtime:0.1.0",
+        closures=[mod, "raw/img:1.0"],
+    )
+    assert cfg.closures == ["fake/img:1.0", "raw/img:1.0"]
+
+
+def test_sandbox_config_rejects_unknown_closure_spec():
+    """A spec that is neither a str nor has __image__ is rejected."""
+    with pytest.raises(Exception):
+        SandboxConfig(
+            image="ubuntu:24.04",
+            runtime="agentix/runtime:0.1.0",
+            closures=[42],  # type: ignore[list-item]
+        )
+
+
+def test_sandbox_config_rejects_module_with_empty_image():
+    import types
+
+    mod = types.ModuleType("agentix_closures.bad")
+    mod.__image__ = ""
+    with pytest.raises(Exception):
+        SandboxConfig(
+            image="ubuntu:24.04",
+            runtime="agentix/runtime:0.1.0",
+            closures=[mod],
+        )

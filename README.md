@@ -57,7 +57,7 @@ async def main():
     config = SandboxConfig(
         image="ubuntu:24.04",
         runtime="agentix/runtime:0.1.0",
-        closures=["agentix/mock-agent:0.1.0"],
+        closures=[mock_agent],   # module with __image__ — or pass a docker ref string
     )
     async with deployment.session(config) as sandbox:
         async with RuntimeClient(sandbox.runtime_url) as c:

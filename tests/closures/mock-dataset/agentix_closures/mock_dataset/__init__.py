@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 __version__ = "0.1.0"
+__image__ = "agentix/mock-dataset:0.1.0"
 
 
 @dataclass
