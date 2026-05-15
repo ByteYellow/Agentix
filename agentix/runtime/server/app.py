@@ -182,7 +182,12 @@ async def remote_call(request: RemoteRequest) -> RemoteResponse:
 # the Socket.IO server and everything else to FastAPI, so plain HTTP
 # endpoints (`/health`, `/_remote`, …) work unchanged through ASGITransport.
 
+import asyncio as _asyncio  # noqa: E402
+
 import socketio as _socketio  # noqa: E402
+
+import agentix.trace as _trace  # noqa: E402
+from agentix.models import TraceEvent as _TraceEvent  # noqa: E402
 
 _sio, _ = make_sio(registry)
 _fastapi_app = app  # the FastAPI instance built above
@@ -190,7 +195,33 @@ app = _socketio.ASGIApp(_sio, _fastapi_app, socketio_path="/socket.io")
 # Re-expose attributes that tests / extensions reach for via `server.app.*`.
 app.fastapi = _fastapi_app  # type: ignore[attr-defined]
 app.state = _fastapi_app.state  # type: ignore[attr-defined]
+_fastapi_app.state.sio = _sio
 app.sio = _sio  # type: ignore[attr-defined]
+
+
+# Wire the closure-side `agentix.trace.emit(...)` helper to the Socket.IO
+# `trace` room. Emission is best-effort and never blocks the caller — sync
+# logging-style fire-and-forget. The dispatcher pins call_id / source via
+# contextvars, so closure impls just write `trace.emit("kind", {...})`.
+
+def _trace_emitter(
+    kind: str,
+    payload: dict,
+    call_id: str | None,
+    source: str | None,
+) -> None:
+    event = _TraceEvent(
+        kind=kind, payload=payload, timestamp=_trace.now(),
+        call_id=call_id, source=source,
+    )
+    try:
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_sio.emit("trace", event.model_dump(mode="json"), room="traces"))
+
+
+_trace._install_emitter(_trace_emitter)
 
 
 # ── Entry point (invoked as /mnt/runtime/entry/bin/start) ───────

@@ -66,12 +66,18 @@ class RemoteRequest(BaseModel):
     """POST /_remote body. `package` is the closure's Python import path
     (e.g. 'agentix_closures.claude_code'); `method` is a stub name bound
     by that closure's Dispatcher.
+
+    `call_id` is an optional rollout correlation key; the dispatcher pins
+    it into a contextvar so trace events emitted from inside the impl
+    inherit it automatically. Stream / bidi calls carry their own
+    `call_id` on the Socket.IO wire — same semantic.
     """
 
     package: str
     method: str
     args: list[Any] = Field(default_factory=list)
     kwargs: dict[str, Any] = Field(default_factory=dict)
+    call_id: str | None = None
 
 
 class RemoteError(BaseModel):
@@ -99,6 +105,25 @@ class LogRecord(BaseModel):
     name: str           # logger name
     message: str        # formatted message
     timestamp: float    # record.created — seconds since epoch
+
+
+class TraceEvent(BaseModel):
+    """One semantic event from a rollout, broadcast via the `trace` Socket.IO
+    event. Closures emit these through `agentix.trace.emit(...)` to record
+    LLM calls, tool invocations, rewards, or arbitrary checkpoint markers.
+
+    The `call_id` correlates events to a specific rollout — for unary HTTP
+    calls it can be set on `RemoteRequest.call_id`; for stream/bidi it's the
+    `call_id` already on the Socket.IO wire frame. The dispatcher pins it
+    into a contextvar before invoking the impl so `trace.emit()` picks it
+    up automatically.
+    """
+
+    kind: str                       # e.g. "llm_request", "llm_response", "tool_call", "reward"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    timestamp: float                # emit-time seconds since epoch
+    call_id: str | None = None      # rollout / call correlation key
+    source: str | None = None       # closure package or "runtime" that emitted this
 
 
 # ── Runtime I/O primitives (exec / upload / download) ────────────

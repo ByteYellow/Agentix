@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
-from pathlib import Path
 
 import httpx
 import pytest
@@ -54,7 +53,15 @@ async def test_auto_load_skips_wrong_abi(runtime_module, mount_package):
         package="agentix_closures.future",
         init_src="def x(): ...",
         impl_src="def x(): return 1",
-        register_src="from agentix.dispatch import Dispatcher\nfrom . import x\nfrom ._impl import x as _x\ndef register():\n    d = Dispatcher(); d.bind(x, _x); return d",
+        register_src=textwrap.dedent("""
+            from agentix.dispatch import Dispatcher
+            from . import x
+            from ._impl import x as _x
+            def register():
+                d = Dispatcher()
+                d.bind(x, _x)
+                return d
+        """),
         abi=999,
     )
     await server._auto_load()
@@ -570,7 +577,7 @@ async def test_logs_subscription(runtime_module, mount_echo, live_server):
             await asyncio.sleep(0.1)
         try:
             await asyncio.wait_for(collector, timeout=5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             collector.cancel()
             raise
 

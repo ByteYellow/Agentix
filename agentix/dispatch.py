@@ -22,13 +22,14 @@ import inspect
 import logging
 import sys
 import traceback
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Generic, ParamSpec, TypeVar, get_args, get_origin
+from typing import Any, Generic, ParamSpec, TypeVar, get_args, get_origin
 
 from pydantic import TypeAdapter, ValidationError
 
+import agentix.trace as trace
 from agentix.models import ClosureManifest, RemoteError, RemoteRequest, RemoteResponse
 
 #: Type origins that indicate a streaming param or return annotation
@@ -189,20 +190,24 @@ class Dispatcher:
                 ok=False,
                 error=RemoteError(type="ValidationError", message=str(exc)),
             )
+        tokens = trace.set_call_context(request.call_id, _source_for(m.impl))
         try:
-            result = m.impl(*args, **kwargs)
-            if inspect.isawaitable(result):
-                result = await result
-        except Exception as exc:
-            logger.exception("closure impl '%s' raised", m.name)
-            return RemoteResponse(
-                ok=False,
-                error=RemoteError(
-                    type=type(exc).__name__,
-                    message=str(exc),
-                    traceback=traceback.format_exc(),
-                ),
-            )
+            try:
+                result = m.impl(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+            except Exception as exc:
+                logger.exception("closure impl '%s' raised", m.name)
+                return RemoteResponse(
+                    ok=False,
+                    error=RemoteError(
+                        type=type(exc).__name__,
+                        message=str(exc),
+                        traceback=traceback.format_exc(),
+                    ),
+                )
+        finally:
+            trace.reset_call_context(tokens)
         try:
             value = m.return_adapter.dump_python(result, mode="json")
         except Exception as exc:
@@ -245,29 +250,33 @@ class Dispatcher:
         except ValidationError as exc:
             yield {"error": RemoteError(type="ValidationError", message=str(exc)).model_dump()}
             return
+        tokens = trace.set_call_context(request.call_id, _source_for(m.impl))
         try:
-            result = m.impl(*args, **kwargs)
-            if inspect.isawaitable(result):
-                result = await result
-            assert m.item_adapter is not None
-            async for item in result:
-                try:
-                    value = m.item_adapter.dump_python(item, mode="json")
-                except Exception as exc:
-                    yield {"error": RemoteError(
-                        type="SerializationError",
-                        message=f"failed to serialize item: {exc}",
-                    ).model_dump()}
-                    return
-                yield {"item": value}
-        except Exception as exc:
-            logger.exception("closure stream impl '%s' raised mid-stream", m.name)
-            yield {"error": RemoteError(
-                type=type(exc).__name__,
-                message=str(exc),
-                traceback=traceback.format_exc(),
-            ).model_dump()}
-            return
+            try:
+                result = m.impl(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                assert m.item_adapter is not None
+                async for item in result:
+                    try:
+                        value = m.item_adapter.dump_python(item, mode="json")
+                    except Exception as exc:
+                        yield {"error": RemoteError(
+                            type="SerializationError",
+                            message=f"failed to serialize item: {exc}",
+                        ).model_dump()}
+                        return
+                    yield {"item": value}
+            except Exception as exc:
+                logger.exception("closure stream impl '%s' raised mid-stream", m.name)
+                yield {"error": RemoteError(
+                    type=type(exc).__name__,
+                    message=str(exc),
+                    traceback=traceback.format_exc(),
+                ).model_dump()}
+                return
+        finally:
+            trace.reset_call_context(tokens)
         yield {"end": True}
 
     async def dispatch_bidi(
@@ -312,29 +321,33 @@ class Dispatcher:
         except (TypeError, ValidationError) as exc:
             yield {"error": RemoteError(type=type(exc).__name__, message=str(exc)).model_dump()}
             return
+        tokens = trace.set_call_context(request.call_id, _source_for(m.impl))
         try:
-            result = m.impl(**coerced)
-            if inspect.isawaitable(result):
-                result = await result
-            assert m.item_adapter is not None
-            async for item in result:
-                try:
-                    value = m.item_adapter.dump_python(item, mode="json")
-                except Exception as exc:
-                    yield {"error": RemoteError(
-                        type="SerializationError",
-                        message=f"failed to serialize item: {exc}",
-                    ).model_dump()}
-                    return
-                yield {"item": value}
-        except Exception as exc:
-            logger.exception("closure bidi impl '%s' raised mid-stream", m.name)
-            yield {"error": RemoteError(
-                type=type(exc).__name__,
-                message=str(exc),
-                traceback=traceback.format_exc(),
-            ).model_dump()}
-            return
+            try:
+                result = m.impl(**coerced)
+                if inspect.isawaitable(result):
+                    result = await result
+                assert m.item_adapter is not None
+                async for item in result:
+                    try:
+                        value = m.item_adapter.dump_python(item, mode="json")
+                    except Exception as exc:
+                        yield {"error": RemoteError(
+                            type="SerializationError",
+                            message=f"failed to serialize item: {exc}",
+                        ).model_dump()}
+                        return
+                    yield {"item": value}
+            except Exception as exc:
+                logger.exception("closure bidi impl '%s' raised mid-stream", m.name)
+                yield {"error": RemoteError(
+                    type=type(exc).__name__,
+                    message=str(exc),
+                    traceback=traceback.format_exc(),
+                ).model_dump()}
+                return
+        finally:
+            trace.reset_call_context(tokens)
         yield {"end": True}
 
     @staticmethod
@@ -372,6 +385,18 @@ class Dispatcher:
             else:  # KEYWORD_ONLY
                 out_kwargs[pname] = v
         return out_args, out_kwargs
+
+
+def _source_for(impl: Callable[..., Any]) -> str | None:
+    """Derive a closure package path from an impl function for trace events.
+
+    Closure impls live at `agentix_closures.<name>._impl`; strip the `._impl`
+    so the trace source reads as the public package the caller imported.
+    """
+    mod = getattr(impl, "__module__", None)
+    if mod is None:
+        return None
+    return mod[:-6] if mod.endswith("._impl") else mod
 
 
 @dataclass

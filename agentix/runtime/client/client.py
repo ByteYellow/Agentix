@@ -24,12 +24,10 @@ import inspect
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
 from pathlib import Path
 from typing import (
     Any,
-    AsyncGenerator,
-    Callable,
     ParamSpec,
     TypeVar,
     get_args,
@@ -51,6 +49,7 @@ from agentix.models import (
     RemoteError,
     RemoteRequest,
     RemoteResponse,
+    TraceEvent,
     UploadResponse,
 )
 
@@ -83,8 +82,9 @@ class RuntimeClient:
         self._sio_lock = asyncio.Lock()
         # call_id -> event queue. Stream and bidi share the same machinery.
         self._pending: dict[str, asyncio.Queue] = {}
-        # log subscribers — each subscriber has its own queue.
+        # log + trace subscribers — each subscriber has its own queue.
         self._log_subscribers: set[asyncio.Queue] = set()
+        self._trace_subscribers: set[asyncio.Queue] = set()
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -315,6 +315,39 @@ class RuntimeClient:
                 with contextlib.suppress(BaseException):
                     await sio.emit("logs:unsubscribe", {})
 
+    async def traces(
+        self,
+        *,
+        kind: str | None = None,
+        call_id: str | None = None,
+    ) -> AsyncIterator[TraceEvent]:
+        """Subscribe to the runtime's trace stream.
+
+        Yields a `TraceEvent` for every `agentix.trace.emit(...)` from any
+        closure. Optional `kind` and `call_id` filters are applied
+        client-side; the server broadcasts all events to subscribers.
+        Iteration ends when the connection closes or the caller breaks.
+        """
+        sio = await self._ensure_sio()
+        sub_q: asyncio.Queue = asyncio.Queue()
+        self._trace_subscribers.add(sub_q)
+        first_sub = len(self._trace_subscribers) == 1
+        try:
+            if first_sub:
+                await sio.emit("traces:subscribe", {})
+            while True:
+                data = await sub_q.get()
+                if kind is not None and data.get("kind") != kind:
+                    continue
+                if call_id is not None and data.get("call_id") != call_id:
+                    continue
+                yield TraceEvent.model_validate(data)
+        finally:
+            self._trace_subscribers.discard(sub_q)
+            if not self._trace_subscribers:
+                with contextlib.suppress(BaseException):
+                    await sio.emit("traces:unsubscribe", {})
+
     # ── Socket.IO connection management ─────────────────────────
 
     async def _ensure_sio(self) -> socketio.AsyncClient:
@@ -339,6 +372,7 @@ class RuntimeClient:
             sio.on("bidi:end", _on_bidi_end)
             sio.on("bidi:error", _on_bidi_error)
             sio.on("log", self._on_log)
+            sio.on("trace", self._on_trace)
 
             await sio.connect(self._base_url)
             self._sio = sio
@@ -352,6 +386,10 @@ class RuntimeClient:
 
     async def _on_log(self, data: dict[str, Any]) -> None:
         for q in list(self._log_subscribers):
+            q.put_nowait(data)
+
+    async def _on_trace(self, data: dict[str, Any]) -> None:
+        for q in list(self._trace_subscribers):
             q.put_nowait(data)
 
     # ── runtime I/O primitives (exec / upload / download) ───────

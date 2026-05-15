@@ -6,8 +6,6 @@ so we drive them through an ASGI transport on the real FastAPI app.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import httpx
 import pytest
 

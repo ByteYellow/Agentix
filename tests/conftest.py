@@ -8,11 +8,10 @@ import json
 import socket
 import sys
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import pytest
-
 
 # ── network / runtime setup ──────────────────────────────────────
 

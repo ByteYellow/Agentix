@@ -310,6 +310,19 @@ def make_sio(registry: Registry) -> tuple[socketio.AsyncServer, socketio.ASGIApp
             logging.getLogger(_ROOT_LOG_NAME).removeHandler(sess.log_handler)
             sess.log_handler = None
 
+    # ── traces ──────────────────────────────────────────────────
+    #
+    # Trace events come from closures via `agentix.trace.emit(...)`. The
+    # runtime broadcasts each event to clients in the "traces" room.
+
+    @sio.on("traces:subscribe")
+    async def on_traces_subscribe(sid: str, _data: dict[str, Any] | None = None) -> None:
+        await sio.enter_room(sid, "traces")
+
+    @sio.on("traces:unsubscribe")
+    async def on_traces_unsubscribe(sid: str, _data: dict[str, Any] | None = None) -> None:
+        await sio.leave_room(sid, "traces")
+
     # ── helpers (closure over sio + sessions) ────────────────────
 
     async def _spawn_call(sess: _SessionState, call_id: str, coro, *, state: _CallState | None = None) -> None:
