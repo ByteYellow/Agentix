@@ -8,7 +8,7 @@ v0.1.0 ships exactly three concerns:
 2. A **runtime server** — one Python process per sandbox that imports each mounted namespace's Python package and exposes typed remote dispatch + sandbox I/O.
 3. A **Docker deployment** — packages namespaces into named volumes, assembles sandboxes, starts the runtime.
 
-See [`ROADMAP.md`](../ROADMAP.md) for what comes later.
+See [`ROADMAP.md`](https://github.com/Agentiix/Agentix/blob/master/ROADMAP.md) for what comes later.
 
 ## Components
 
@@ -139,4 +139,4 @@ docker run -d \
 
 - Bearer-token auth on the runtime (sandbox-level trust assumed).
 - Streaming returns from `remote(...)` (request/response only; reserved for v0.2).
-- Higher-level interfaces for agents / datasets / benchmarks — see [`ROADMAP.md`](../ROADMAP.md).
+- Higher-level interfaces for agents / datasets / benchmarks — see [`ROADMAP.md`](https://github.com/Agentiix/Agentix/blob/master/ROADMAP.md).

@@ -21,6 +21,11 @@ dev = [
     "ruff>=0.6",
     "pyright>=1.1.380",
 ]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10",
+]
 
 [project.scripts]
 # Dev-side CLI: `agentix build`, `agentix check`. Subcommands live in
