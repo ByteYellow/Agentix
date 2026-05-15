@@ -118,7 +118,7 @@ class TraceEvent(BaseModel):
 # ── Runtime I/O primitives (exec / upload / download) ───────────────
 
 
-class ExecRequest(BaseModel):
+class BashCommandRequest(BaseModel):
     command: str
     cwd: str | None = None
     env: dict[str, str] | None = None
@@ -138,7 +138,7 @@ class ExecRequest(BaseModel):
     )
 
 
-class ExecResponse(BaseModel):
+class BashCommandResponse(BaseModel):
     exit_code: int
     stdout: str
     stderr: str

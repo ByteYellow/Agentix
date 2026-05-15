@@ -60,9 +60,9 @@ from agentix.runtime.events import (
 )
 from agentix.runtime.models import (
     STREAM_ORIGINS,
+    BashCommandRequest,
+    BashCommandResponse,
     ClosureInfo,
-    ExecRequest,
-    ExecResponse,
     HealthResponse,
     LogRecord,
     RemoteError,
@@ -422,7 +422,7 @@ class RuntimeClient:
         max_output: int | None = None,
         paths_from: list[str] | None = None,
     ) -> dict[str, Any]:
-        return ExecRequest(
+        return BashCommandRequest(
             command=command,
             cwd=cwd,
             env=env,
@@ -439,7 +439,7 @@ class RuntimeClient:
         timeout: float | None = None,
         max_output: int | None = None,
         paths_from: list[str] | None = None,
-    ) -> ExecResponse:
+    ) -> BashCommandResponse:
         """Buffered shell exec: run `command` and return the full captured output.
 
         `paths_from` prepends the `bin/` of the listed closures (by Python
@@ -449,7 +449,7 @@ class RuntimeClient:
         body = self._exec_body(command, cwd, env, timeout, max_output, paths_from)
         r = await self._client.post("/exec", json=body)
         r.raise_for_status()
-        return ExecResponse.model_validate(r.json())
+        return BashCommandResponse.model_validate(r.json())
 
     async def run_stream(
         self,

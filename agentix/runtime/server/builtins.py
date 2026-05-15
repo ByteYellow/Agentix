@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from agentix.runtime.models import ExecRequest, ExecResponse, UploadResponse
+from agentix.runtime.models import BashCommandRequest, BashCommandResponse, UploadResponse
 
 UPLOAD_ROOT = Path(os.environ.get("AGENTIX_UPLOAD_ROOT", "/workspace")).resolve()
 MAX_OUTPUT_BYTES = int(os.environ.get("AGENTIX_MAX_OUTPUT_BYTES", str(10 * 1024 * 1024)))
@@ -107,7 +107,7 @@ async def _read_capped(stream: asyncio.StreamReader, limit: int) -> str:
 
 
 @router.post("/exec")
-async def exec_endpoint(req: ExecRequest, request: Request):
+async def exec_endpoint(req: BashCommandRequest, request: Request):
     """Run a shell command. SSE when `Accept: text/event-stream`; else buffered JSON."""
     prepend = None
     if req.paths_from:
@@ -130,7 +130,7 @@ async def _exec_buffered(
     env: dict[str, str],
     timeout: float | None,
     max_output: int,
-) -> ExecResponse:
+) -> BashCommandResponse:
     proc = await asyncio.create_subprocess_shell(
         command,
         stdout=asyncio.subprocess.PIPE,
@@ -149,8 +149,8 @@ async def _exec_buffered(
     except TimeoutError:
         proc.kill()
         await proc.communicate()
-        return ExecResponse(exit_code=-1, stdout="", stderr=f"Command timed out after {timeout}s")
-    return ExecResponse(exit_code=proc.returncode or 0, stdout=stdout, stderr=stderr)
+        return BashCommandResponse(exit_code=-1, stdout="", stderr=f"Command timed out after {timeout}s")
+    return BashCommandResponse(exit_code=proc.returncode or 0, stdout=stdout, stderr=stderr)
 
 
 def _sse(event: str, payload: dict) -> bytes:
