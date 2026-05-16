@@ -38,6 +38,24 @@ jobs:
           unzip -q export.zip -d _site
           touch _site/.nojekyll
 
+      - name: Shrink code-block font
+        # docs.json has no `customCss` and `fonts` has no `code` sub-object
+        # (verified against settings-appearance docs). Inject a tiny <style>
+        # block into every page's <head> so fenced code reads at 0.82em.
+        working-directory: docs
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          snippet = (
+              '<style>pre,pre *{font-size:0.82em!important;'
+              'line-height:1.55!important}</style>'
+          )
+          for html in pathlib.Path('_site').rglob('*.html'):
+              s = html.read_text()
+              if '</head>' in s and snippet not in s:
+                  html.write_text(s.replace('</head>', snippet + '</head>', 1))
+          PY
+
       - name: Deploy to Agentiix.github.io
         uses: peaceiris/actions-gh-pages@v4
         with:
