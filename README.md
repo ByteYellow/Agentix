@@ -2,73 +2,81 @@
 
 # Agentix
 
-**Typed Python namespaces for sandbox-based agent workflows.**
+**The pip ecosystem for sandboxed agents.**
+Compose agents, tools, and benchmarks into a sandbox you can call as typed Python.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/Agentiix/Agentix)](https://github.com/Agentiix/Agentix)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Docs](https://img.shields.io/badge/docs-agentiix.github.io-blue)](https://agentiix.github.io/)
 
 </div>
 
-## What it is
-
-A small framework that lets you compose agent / dataset / primitive code into a sandbox and call it from your trainer or harness as if it were local typed Python:
+## A SWE-bench rollout, end-to-end
 
 ```python
-from agentix import RuntimeClient, bash
-from agentix import claude_code        # pip install agentix-claude-code
-from agentix import swebench           # pip install agentix-swebench
+from agentix import RuntimeClient, bash, claude_code, swebench
 
 async with RuntimeClient(sandbox_url) as c:
-    task   = await c.remote(swebench.get_task, idx=42)
-    patch  = await c.remote(claude_code.run, instruction=task.problem)
-    reward = await c.remote(swebench.score, idx=42, patch=patch)
+    await c.remote(bash.run, command=f"git clone {url} /testbed")
+    cc = await c.remote(
+        claude_code.run, instruction=task, workdir="/testbed",
+    )
+    s = await c.remote(swebench.score, instance=inst, patch=cc.patch)
 ```
 
-Every extension is a normal pip-installable distribution. There is no custom config file, no decorator at import time, no per-framework registry call: the user installs a wheel and the framework discovers it via Python entry points.
+Three pip-installed namespaces, composed in your trainer. Pyright
+infers every return type. No YAML config, no codegen, no per-framework
+registry call.
 
-Two plugin axes — `agentix.namespace` for things that run *inside* the sandbox, and `agentix.deployment` for backends that decide *where* the sandbox runs. Everything else (trace sinks, wire patterns, spec resolvers) is plain Python you import and call (see "Extending Agentix" below).
+## What you get
+
+| | |
+|---|---|
+| **Pip the agent** | `pip install agentix-claude-code` ships Claude Code as a typed namespace. Every integration is a regular Python wheel. |
+| **Sandboxed by default** | Each `RuntimeClient` is an isolated Docker container. Let the agent `rm -rf`; your host is untouched. |
+| **Typed remote calls** | `c.remote(fn, ...)` reads `fn`'s signature — Pyright infers return types end-to-end. Write `cc.patch`, not `cc["patch"]`. |
+| **Per-namespace venvs** | Mix Aider, OpenHands, and your custom tool in one sandbox without resolving deps across them. |
+| **Three call shapes, auto-detected** | `async def → T` is unary. `yield T` is streaming. Add `Channel[U]` for bidi. The wire follows your signature. |
+| **Swappable backends** | `local` (Docker), `daytona`, `e2b` — pick one with `agentix deploy <name>`. `pip install agentix-deployment-*` adds another. |
 
 ## Install
 
 ```bash
-pip install agentix
-# Plus whichever namespaces you actually need:
-pip install agentix-bash agentix-files
-pip install agentix-claude-code agentix-swebench   # examples — not yet on PyPI
+pip install agentix agentix-bash agentix-files
 ```
 
-For local development of the framework itself:
+Plus recipes from the [cookbook](https://github.com/Agentiix/agentix-cookbook):
 
 ```bash
-git clone https://github.com/Agentiix/Agentix.git
-cd Agentix
+git clone https://github.com/Agentiix/agentix-cookbook
+pip install ./agentix-cookbook/claude-code ./agentix-cookbook/swebench
+```
+
+For framework development:
+
+```bash
+git clone https://github.com/Agentiix/Agentix && cd Agentix
 pip install -e '.[dev]'
-pip install -e primitives/bash -e primitives/files   # the bundled primitives
+pip install -e primitives/bash -e primitives/files
 ```
 
 ## CLI
 
 ```bash
-agentix build primitives/bash                              # build a single namespace image
+agentix build primitives/bash                              # build one namespace image
 agentix build bash files claude-code -o my-agent:0.1.0     # bundle several namespaces
 agentix deploy local --image my-agent:0.1.0                # run a sandbox + connect
 agentix check                                              # smoke-import every installed namespace
 ```
 
-The four subcommands are framework built-ins. Third parties that want their own `agentix-foo` verb should ship a separate `console_scripts` binary — the `agentix` dispatcher itself is not a plugin surface.
-
-## Writing a namespace
-
-A namespace is a Python **package** — `agentix.<short>` — whose top-level async functions are the remote-callable surface. The framework duck-types the discovery: dataclasses, constants, and other helpers can coexist in the same package; they're regular Python imports for callers, not remote methods.
+## Write a namespace
 
 ```python
 # src/agentix/myagent/__init__.py
 async def run(instruction: str) -> str:
-    ...
+    return f"did: {instruction}"
 ```
-
-Ship it with one entry-point declaration pointing at the **package**:
 
 ```toml
 # pyproject.toml
@@ -83,39 +91,27 @@ myagent = "agentix.myagent"
 packages = ["src/agentix"]
 ```
 
-`pip install agentix-myagent` is the entire setup. Caller-side:
+`pip install agentix-myagent` and your users can do
+`from agentix import myagent` → `await c.remote(myagent.run, ...)`.
+The framework discovers the entry point at sandbox startup; the first
+`c.remote(...)` call to your namespace spawns its worker.
 
-```python
-from agentix import myagent
-result = await c.remote(myagent.run, instruction="...")
-```
+## Two plugin axes
 
-The framework's `agentix/__init__.py` extends `__path__` so `agentix.<your-namespace>` resolves natively; PEP 420 namespace packages mean multiple dists can install peer entries under `agentix/` without colliding. Reserved framework subpackages (`agentix.cli`, `agentix.dispatch`, `agentix.deployment`, …) are listed in [CLAUDE.md](CLAUDE.md).
-
-## Extending Agentix
-
-Two plugin axes — only the things that cross the host↔sandbox boundary deserve entry-point discovery:
+Only things that cross the host↔sandbox boundary go through entry-point
+discovery:
 
 | Axis | Entry-point group | What it ships | Built-ins |
 |---|---|---|---|
-| Namespaces | `agentix.namespace` | Python class whose code runs **inside the sandbox** | (third-party only) |
-| Deployments | `agentix.deployment` | host-side backend that **provisions** the sandbox | `local` / `daytona` / `e2b` |
+| Namespaces | `agentix.namespace` | code that runs **inside the sandbox** | (third-party) |
+| Deployments | `agentix.deployment` | backend that **provisions** the sandbox | `local` / `daytona` / `e2b` |
 
-```toml
-[project.entry-points."agentix.namespace"]
-my-thing = "agentix.my_thing:MyThing"
-```
+Everything else is host-side Python you import and call:
 
-> The quotes around the group name are TOML syntax — `agentix.namespace` contains a dot, and TOML treats dots in `[a.b.c]` as table-key separators. Quoting forces it to be a single key. Every framework with a dotted group name does this (`flask.commands`, `mkdocs.plugins`, `sphinx.builders`, …).
-
-Everything else lives entirely on the host:
-
-- **Trace pub/sub** — `agentix.trace.subscribe(fn)` to add a trace consumer (OTel, Sentry, custom bus).
-- **Wire patterns** — three built-ins (`unary` / `stream` / `bidi`) cover every call shape; not user-extensible. Add a fourth by editing `agentix/wire.py` directly.
-- **Spec resolvers** — internal ordered list in `agentix/cli/_resolve.py`; new spec shapes mean editing that file.
-- **CLI verbs** — ship your own `agentix-yourcmd` `console_scripts` binary; the central CLI is not a plugin surface.
-
-See [`docs/namespace.mdx`](docs/namespace.mdx) / [`docs/deployment.mdx`](docs/deployment.mdx) for what each axis is, plus the [`docs/integrate-agent.mdx`](docs/integrate-agent.mdx) / [`docs/integrate-dataset.mdx`](docs/integrate-dataset.mdx) / [`docs/extend-runtime.mdx`](docs/extend-runtime.mdx) guides for end-to-end recipes. Rendered site: [agentiix.github.io](https://agentiix.github.io/).
+- **Trace pub/sub** — `agentix.trace.subscribe(fn)` to fan trace
+  events into OTel, Sentry, or your own bus.
+- **Spec resolvers, wire patterns, CLI verbs** — in-tree code; ship a
+  separate `console_scripts` binary if you want a custom verb.
 
 ## Architecture
 
@@ -125,24 +121,18 @@ Orchestrator ──HTTP /_remote──► Runtime Server ──in-process call�
             Socket.IO /socket.io/  ◄─── streams, bidi, logs, traces ───►
 ```
 
-| Component | Role |
-|---|---|
-| Runtime server | `/health`, `/namespaces`, `/_remote` (unary), `/socket.io/` (streams/bidi/logs/traces), `/_llm/<provider>/<path>` (LLM-proxy fan-in) |
-| Namespace | Python class registered under `agentix.namespace` entry point; methods called via `c.remote(...)` |
-| Deployment | Sandbox CRUD plugin under `agentix.deployment`; `local` (Docker) is built in |
-| Call shape | Detected from signature (unary / stream / bidi); editable in `agentix/dispatch.py` |
-| Trace sink | Optional observability hook — receives every `trace.emit(...)` event |
+Discovery is lazy — one broken namespace doesn't block sandbox boot.
+See [docs/reference/architecture.mdx](docs/reference/architecture.mdx)
+and [docs/reference/namespace-protocol.mdx](docs/reference/namespace-protocol.mdx)
+for protocol details.
 
-Discovery is lazy: namespace `ep.load()` is deferred until the first `/_remote` call for that namespace; one broken namespace doesn't block sandbox boot. See [`docs/reference/architecture.mdx`](docs/reference/architecture.mdx) and [`docs/reference/namespace-protocol.mdx`](docs/reference/namespace-protocol.mdx) for protocol details.
+## Links
 
-## Roadmap
-
-See [ROADMAP.md](ROADMAP.md).
-
-## Contributing
-
-See [docs/development.mdx](docs/development.mdx). Project conventions in [CLAUDE.md](CLAUDE.md) — read the "组合优于继承 / Composition over inheritance" section. Docs site is built with Mintlify; see [`docs/DEPLOY.md`](docs/DEPLOY.md) for the one-time GitHub Pages setup.
+- **Docs site:** [agentiix.github.io](https://agentiix.github.io/)
+- **Cookbook:** [Agentiix/agentix-cookbook](https://github.com/Agentiix/agentix-cookbook)
+- **Roadmap:** [ROADMAP.md](ROADMAP.md)
+- **Contributing:** [docs/development.mdx](docs/development.mdx); conventions in [CLAUDE.md](CLAUDE.md)
 
 ## License
 
-[MIT License](LICENSE)
+[MIT](LICENSE)

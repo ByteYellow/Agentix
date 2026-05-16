@@ -1,46 +1,69 @@
 ---
-title: Agentix
-description: Typed Python namespaces for sandbox-based agent workflows.
+title: The pip ecosystem for sandboxed agents
+description: Compose agents, tools, and benchmarks into a sandbox you can call as typed Python.
 ---
 
-Agentix lets you compose agents, datasets, and primitive tools into a
-sandbox and call them from your trainer or harness as typed Python:
-
 ```python
-from agentix import RuntimeClient
-from agentix import bash, claude_code, swebench
+from agentix import RuntimeClient, bash, claude_code, swebench
 
 async with RuntimeClient(sandbox_url) as c:
+    await c.remote(bash.run, command=f"git clone {url} /testbed")
     cc = await c.remote(
-        claude_code.run, instruction=problem, workdir="/testbed",
+        claude_code.run, instruction=task, workdir="/testbed",
     )
     s = await c.remote(swebench.score, instance=inst, patch=cc.patch)
 ```
 
-Every extension is a normal pip-installable distribution. No custom
-config file, no decorator at import time, no per-framework registry
-call — `pip install` the wheel and the framework discovers it via
-Python entry points.
+A full SWE-bench rollout — three pip-installed namespaces composed in
+your trainer. Pyright infers every return type. No YAML config, no
+codegen, no per-framework registry call.
 
-## What's here
+## What you get
+
+<CardGroup cols={3}>
+  <Card title="Pip the agent" icon="cube">
+    `pip install agentix-claude-code` ships Claude Code as a typed
+    namespace. Every integration is a regular Python wheel — no YAML,
+    no decorators, no manifest files.
+  </Card>
+  <Card title="Sandboxed by default" icon="lock">
+    Each `RuntimeClient` is an isolated Docker container. Let the
+    agent `rm -rf`; your host is untouched. Swap Docker → Daytona →
+    E2B with one line.
+  </Card>
+  <Card title="Typed remote calls" icon="check">
+    `c.remote(fn, ...)` reads `fn`'s signature. Pyright infers return
+    types end-to-end — you write `cc.patch`, not `cc["patch"]`.
+  </Card>
+  <Card title="Per-namespace venvs" icon="layer-group">
+    Each extension gets its own venv. Mix Aider, OpenHands, and your
+    custom tool in one sandbox without resolving deps across them.
+  </Card>
+  <Card title="Three call shapes, auto-detected" icon="signal">
+    `async def → T` is unary. `yield T` is server-streaming.
+    Add a `Channel[U]` parameter for bidi. The wire follows your
+    signature.
+  </Card>
+  <Card title="Trace fan-out" icon="diagram-project">
+    Every namespace's `agentix.trace.emit(...)` fans out to every
+    subscriber. Wire it to OTel, Sentry, Logfire, or your own bus
+    with `subscribe(handler)`.
+  </Card>
+</CardGroup>
+
+## Get started
 
 <CardGroup cols={2}>
   <Card title="Quick start" icon="rocket" href="/quickstart">
-    Install, call a namespace, write your own.
+    Install, deploy a sandbox, call a namespace — in five minutes.
   </Card>
-  <Card title="Namespace" icon="cube" href="/namespace">
-    A Python package whose top-level async functions are remote-callable.
+  <Card title="Cookbook" icon="book" href="https://github.com/Agentiix/agentix-cookbook">
+    Worked recipes: Claude Code + SWE-bench, end-to-end.
   </Card>
-  <Card title="Deployment" icon="server" href="/deployment">
-    Backend that provisions sandboxes — `local` / `daytona` / `e2b`.
+  <Card title="Write a namespace" icon="code" href="/namespace">
+    Wrap your agent CLI as a pip-installable typed remote call.
   </Card>
   <Card title="Architecture" icon="sitemap" href="/reference/architecture">
-    Discovery, dispatch, and runtime layout.
-  </Card>
-  <Card title="Namespace protocol" icon="diagram-project" href="/reference/namespace-protocol">
-    Wire-format contract between caller and sandbox.
-  </Card>
-  <Card title="CLI" icon="terminal" href="/reference/cli">
-    `agentix build / deploy / check`.
+    Dispatcher, runtime layout, wire patterns.
   </Card>
 </CardGroup>
