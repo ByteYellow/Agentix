@@ -92,7 +92,7 @@ The framework has **two** plugin axes — only the things that cross the host↔
 
 Everything else (trace sinks, wire patterns, spec resolvers, CLI verbs) is pure host-side Python. The hooks are plain functions/classes you import — no entry points, no `Registry[T]`. See [feedback memory](../../.claude/projects/-apdcephfs-gy4-share-302774114-davejhwang-Agentix/memory/feedback_plugins_only_cross_sandbox.md) for the principle.
 
-- `agentix.trace.register_sink(fn)` to add a trace consumer (OTel, Sentry, custom bus).
+- `agentix.trace.subscribe(fn)` to add a trace consumer (OTel, Sentry, custom bus).
 - Wire patterns are a frozen tuple of three built-ins (`unary` / `stream` / `bidi`) in `agentix/wire.py`. No extension hook — add a fourth `WirePattern` subclass directly if a new call shape ever becomes necessary.
 - Spec resolvers live as an ordered list in `agentix/cli/_resolve.py`; new spec shapes mean editing that file, not shipping a wheel.
 - A new `agentix <verb>` CLI: ship your own `agentix-yourcmd` `console_scripts` binary; the central CLI is not a plugin surface.

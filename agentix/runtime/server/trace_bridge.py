@@ -3,8 +3,8 @@
 Trace events reach the runtime two ways:
 
   1. **In-process workers** (test fixtures) call `agentix.trace.emit` in
-     the runtime's own process — the local `_sinks` list fires, including
-     the SIO emitter we register below.
+     the runtime's own process — the local subscriber list fires,
+     including the SIO emitter we subscribe below.
   2. **Subprocess workers** (production) call `agentix.trace.emit` in
      a child process, which forwards `trace` frames over stdio. The
      multiplexer's `_trace_forwarder` callback (the same function we
@@ -29,7 +29,7 @@ from agentix.runtime.models import TraceEvent
 
 
 def install_trace_bridge(sio: socketio.AsyncServer):
-    """Register the SIO-emitting sink and return the callback for the
+    """Subscribe the SIO-emitting handler and return the callback for the
     multiplexer's `trace_forwarder` to call.
 
     Emission is best-effort and fire-and-forget — no awaiting from the
@@ -50,8 +50,8 @@ def install_trace_bridge(sio: socketio.AsyncServer):
         )
         loop.create_task(sio.emit(TRACE, event.model_dump(mode="json"), room=TRACES_ROOM))
 
-    # Path 1: in-process workers' trace.emit() flows through this sink.
-    trace.register_sink(_emit)
+    # Path 1: in-process workers' trace.emit() flows through this handler.
+    trace.subscribe(_emit)
     # Path 2: returned to the multiplexer so subprocess workers' trace
     # frames go through the same emitter.
     return _emit

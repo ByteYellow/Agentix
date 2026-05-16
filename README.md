@@ -115,7 +115,7 @@ my-thing = "agentix.my_thing:MyThing"
 
 Everything else lives entirely on the host:
 
-- **Trace sinks** — `agentix.trace.register_sink(fn)` to add a trace consumer (OTel, Sentry, custom bus).
+- **Trace pub/sub** — `agentix.trace.subscribe(fn)` to add a trace consumer (OTel, Sentry, custom bus).
 - **Wire patterns** — three built-ins (`unary` / `stream` / `bidi`) cover every call shape; not user-extensible. Add a fourth by editing `agentix/wire.py` directly.
 - **Spec resolvers** — internal ordered list in `agentix/cli/_resolve.py`; new spec shapes mean editing that file.
 - **CLI verbs** — ship your own `agentix-yourcmd` `console_scripts` binary; the central CLI is not a plugin surface.

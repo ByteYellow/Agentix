@@ -76,9 +76,9 @@ class Worker:
         writer = asyncio.StreamWriter(transport, protocol, None, loop)
         self._reader, self._writer = reader, writer
 
-        # Install trace forwarder before we say "ready" — any boot-time
+        # Subscribe trace forwarder before we say "ready" — any boot-time
         # trace events get captured.
-        trace.register_sink(self._trace_sink)
+        trace.subscribe(self._trace_handler)
 
         await self._send({"type": "ready", "package": self._package})
 
@@ -102,10 +102,10 @@ class Worker:
         async with self._send_lock:
             await write_frame(self._writer, payload)
 
-    def _trace_sink(self, kind: str, payload: dict, call_id, source) -> None:
-        # Sync sink; schedule the actual frame write on the loop. Per the
-        # `agentix.trace` contract, sink errors are caught upstream — we
-        # only need to avoid raising.
+    def _trace_handler(self, kind: str, payload: dict, call_id, source) -> None:
+        # Sync handler; schedule the actual frame write on the loop. Per
+        # the `agentix.trace` contract, handler errors are caught upstream
+        # — we only need to avoid raising.
         frame = {"type": "trace", "kind": kind, "payload": payload}
         if call_id is not None:
             frame["call_id"] = call_id

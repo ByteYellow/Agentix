@@ -1,22 +1,21 @@
-"""Trace emission with fan-out sinks.
+"""Trace emission with pub/sub subscribers.
 
 Namespace impls call `agentix.trace.emit(kind, payload)` to record one
-event in the rollout's trace. Every registered **trace sink** receives
-the event. The framework's runtime ships a sink that fans events out
-over the Socket.IO `trace` channel; observability sinks (Sentry, OTel,
-Logfire, …) register their own by calling `register_sink(fn)` at
-startup — there's no entry-point machinery here, it's a plain Python
-API.
+event in the rollout's trace. Every subscriber receives the event. The
+framework's runtime ships a subscriber that fans events out over the
+Socket.IO `trace` channel; observability handlers (Sentry, OTel,
+Logfire, …) attach their own by calling `subscribe(fn)` at startup —
+there's no entry-point machinery here, it's a plain Python API.
 
 ```python
 # in your runtime extension or app startup
-from agentix.trace import register_sink
+from agentix.trace import subscribe
 
-def my_sink(kind, payload, call_id, source):
+def my_handler(kind, payload, call_id, source):
     # forward to OTel / Sentry / your own bus
     ...
 
-register_sink(my_sink)
+subscribe(my_handler)
 ```
 
 `call_id` correlates events to a specific rollout. The dispatcher pins
@@ -37,16 +36,16 @@ from agentix.idents import CallId, PackageName
 
 logger = logging.getLogger("agentix.trace")
 
-SinkFn = Callable[[str, dict[str, Any], CallId | None, PackageName | None], None]
-"""A trace sink: `(kind, payload, call_id, source) -> None`. Sinks
-should never raise (the framework swallows exceptions to keep tracing
-from breaking a rollout), but the framework also defensively wraps
-each call."""
+Handler = Callable[[str, dict[str, Any], CallId | None, PackageName | None], None]
+"""A trace subscriber: `(kind, payload, call_id, source) -> None`.
+Handlers should never raise (the framework swallows exceptions to keep
+tracing from breaking a rollout), but the framework also defensively
+wraps each call."""
 
-# In-process sink list. `register_sink` appends; emit() fans out across
-# every sink. Sinks live for the runtime's lifetime; tests use
-# `unregister_sink` to clean up.
-_sinks: list[SinkFn] = []
+# In-process subscriber list. `subscribe` appends; emit() fans out
+# across every subscriber. Subscribers live for the process's lifetime;
+# tests use `unsubscribe` to clean up.
+_subscribers: list[Handler] = []
 
 _current_call_id: contextvars.ContextVar[CallId | None] = contextvars.ContextVar(
     "agentix_trace_call_id", default=None,
@@ -56,24 +55,24 @@ _current_source: contextvars.ContextVar[PackageName | None] = contextvars.Contex
 )
 
 
-def register_sink(sink: SinkFn) -> None:
-    """Add a trace sink. Receives every event emitted from any namespace
+def subscribe(handler: Handler) -> None:
+    """Add a trace subscriber. Receives every event emitted from any namespace
     via `agentix.trace.emit(...)`.
 
-    Sink errors are logged + swallowed (tracing must never break a
-    rollout). Sinks are called in registration order.
+    Handler errors are logged + swallowed (tracing must never break a
+    rollout). Handlers are called in subscription order.
     """
-    _sinks.append(sink)
+    _subscribers.append(handler)
 
 
-def unregister_sink(sink: SinkFn) -> None:
-    """Remove a previously-registered sink. No-op if not present.
+def unsubscribe(handler: Handler) -> None:
+    """Remove a previously-subscribed handler. No-op if not present.
 
     Mostly used by tests to clean up after themselves; production
-    sinks live for the runtime's lifetime.
+    handlers live for the process's lifetime.
     """
     try:
-        _sinks.remove(sink)
+        _subscribers.remove(handler)
     except ValueError:
         pass
 
@@ -112,23 +111,23 @@ def emit(
     call_id: CallId | None = None,
     source: PackageName | None = None,
 ) -> None:
-    """Record a single trace event. Fans out to every registered sink.
+    """Record a single trace event. Fans out to every subscriber.
 
     `call_id` and `source` default to the dispatcher-set context. Namespaces
     should normally call `emit("kind", {...})` and let the runtime fill
-    in the correlation. Sink errors are logged + swallowed — tracing
+    in the correlation. Handler errors are logged + swallowed — tracing
     must never break a rollout.
     """
-    if not _sinks:
+    if not _subscribers:
         return
     cid: Final = call_id if call_id is not None else _current_call_id.get()
     src: Final = source if source is not None else _current_source.get()
     pl = payload or {}
-    for sink in _sinks:
+    for handler in _subscribers:
         try:
-            sink(kind, pl, cid, src)
+            handler(kind, pl, cid, src)
         except Exception as exc:
-            logger.warning("trace sink %r raised: %s", getattr(sink, "__name__", sink), exc)
+            logger.warning("trace handler %r raised: %s", getattr(handler, "__name__", handler), exc)
 
 
 def now() -> float:

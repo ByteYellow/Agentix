@@ -5,8 +5,8 @@ Two surfaces qualify as plugin axes (entry-point discovered, `Registry[T]`-backe
   * `agentix.namespace` — covered by `test_namespace.py` / `test_namespace_protocol.py`
   * `agentix.deployment` — covered below (select-one by name)
 
-The host-side trace-sink API (`register_sink` / `unregister_sink`) is
-a plain Python hook, not a plugin axis — sanity-tested below alongside
+The host-side trace pub/sub API (`subscribe` / `unsubscribe`) is a
+plain Python hook, not a plugin axis — sanity-tested below alongside
 the deployment plugin tests.
 """
 
@@ -47,32 +47,32 @@ def test_deployment_unknown_name_raises(monkeypatch):
         load_deployment("never-registered")
 
 
-# ── trace sinks (host-side fan-out API) ──────────────────────────────
+# ── trace pub/sub (host-side fan-out API) ────────────────────────────
 
 
-def test_trace_sinks_fan_out():
+def test_trace_subscribers_fan_out():
     from agentix import trace
     seen_a: list = []
     seen_b: list = []
 
-    def sink_a(kind, payload, call_id, source):
+    def handler_a(kind, payload, call_id, source):
         seen_a.append((kind, payload))
 
-    def sink_b(kind, payload, call_id, source):
+    def handler_b(kind, payload, call_id, source):
         seen_b.append(kind)
 
-    trace.register_sink(sink_a)
-    trace.register_sink(sink_b)
+    trace.subscribe(handler_a)
+    trace.subscribe(handler_b)
     try:
         trace.emit("x", {"v": 1})
         assert ("x", {"v": 1}) in seen_a
         assert "x" in seen_b
     finally:
-        trace.unregister_sink(sink_a)
-        trace.unregister_sink(sink_b)
+        trace.unsubscribe(handler_a)
+        trace.unsubscribe(handler_b)
 
 
-def test_trace_one_sink_failure_does_not_block_others():
+def test_trace_one_subscriber_failure_does_not_block_others():
     from agentix import trace
     delivered: list = []
 
@@ -80,27 +80,27 @@ def test_trace_one_sink_failure_does_not_block_others():
         delivered.append(kind)
 
     def bad(kind, payload, call_id, source):
-        raise RuntimeError("sink down")
+        raise RuntimeError("handler down")
 
-    trace.register_sink(bad)
-    trace.register_sink(good)
+    trace.subscribe(bad)
+    trace.subscribe(good)
     try:
         trace.emit("y", {})
         assert "y" in delivered
     finally:
-        trace.unregister_sink(bad)
-        trace.unregister_sink(good)
+        trace.unsubscribe(bad)
+        trace.unsubscribe(good)
 
 
-def test_trace_no_sinks_is_noop():
-    """emit() with no sinks must not raise — namespaces running outside
+def test_trace_no_subscribers_is_noop():
+    """emit() with no subscribers must not raise — namespaces running outside
     a runtime should be able to call trace.emit() freely."""
     from agentix import trace
-    snapshot = list(trace._sinks)
-    trace._sinks.clear()
+    snapshot = list(trace._subscribers)
+    trace._subscribers.clear()
     try:
         trace.emit("z", {})  # must not raise
     finally:
-        trace._sinks.extend(snapshot)
+        trace._subscribers.extend(snapshot)
 
 
