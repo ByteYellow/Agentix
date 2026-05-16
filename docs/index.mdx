@@ -1,69 +1,83 @@
 ---
-title: The pip ecosystem for sandboxed agents
-description: Compose agents, tools, and benchmarks into a sandbox you can call as typed Python.
+title: Agentix
+description: A sandbox framework for agentic RL training and evaluation.
 ---
 
+**Agentix** is a sandbox framework for agentic RL training and evaluation,
+providing three core capabilities:
+
+1. **Sandboxed agent execution** — every rollout runs inside an isolated
+   container. Built-in backends: `local` (Docker), `daytona`, `e2b`.
+2. **Pip-installable agent / dataset / tool extensions** — each extension
+   is a standalone Python wheel with one entry-point block; the
+   framework discovers it via `importlib.metadata` (no YAML, no
+   decorator, no per-framework registry call).
+3. **Typed remote dispatch** — compose namespaces in your trainer with
+   `c.remote(fn, ...)`; Pyright infers return types end-to-end.
+
+## Out-of-the-box integrations
+
+Agentix ships **bash** and **files** as in-tree primitives. The
+[agentix-cookbook](https://github.com/Agentiix/agentix-cookbook)
+repository provides:
+
+- **Claude Code** (`agentix-claude-code`) — the Anthropic CLI wrapped
+  as a typed namespace, with a Nix-pinned binary and per-call API key
+  passthrough.
+- **SWE-bench Verified** (`agentix-swebench`) — `score(instance, patch)`
+  using the official [`swebench`](https://github.com/swe-bench/SWE-bench)
+  package for per-repo test specs, log parsers, and grading.
+
+[agentix-llm-proxy](https://github.com/Agentiix/agentix-llm-proxy)
+intercepts LLM API calls from any agent CLI and fans the traces to:
+
+- [**slime**](https://github.com/THUDM/slime) — for on-policy RL
+  post-training; traces stream into slime's data buffer.
+
+## End-to-end example
+
 ```python
+from datasets import load_dataset
 from agentix import RuntimeClient, bash, claude_code, swebench
 
-async with RuntimeClient(sandbox_url) as c:
-    await c.remote(bash.run, command=f"git clone {url} /testbed")
-    cc = await c.remote(
-        claude_code.run, instruction=task, workdir="/testbed",
+inst = dict(load_dataset("princeton-nlp/SWE-bench_Verified", split="test")[0])
+
+async with RuntimeClient(sandbox.runtime_url) as c:
+    await c.remote(
+        bash.run,
+        command=(
+            f"git clone https://github.com/{inst['repo']}.git /testbed && "
+            f"cd /testbed && git checkout {inst['base_commit']}"
+        ),
     )
-    s = await c.remote(swebench.score, instance=inst, patch=cc.patch)
+    cc = await c.remote(
+        claude_code.run,
+        instruction=inst["problem_statement"],
+        workdir="/testbed",
+        env={"ANTHROPIC_API_KEY": api_key},
+    )
+    diff = await c.remote(
+        bash.run, command="cd /testbed && git add -A && git diff --cached",
+    )
+    s = await c.remote(swebench.score, instance=inst, patch=diff.stdout)
 ```
 
-A full SWE-bench rollout — three pip-installed namespaces composed in
-your trainer. Pyright infers every return type. No YAML config, no
-codegen, no per-framework registry call.
+A SWE-bench Verified rollout, composed from three pip-installed
+namespaces.
 
-## What you get
-
-<CardGroup cols={3}>
-  <Card title="Pip the agent" icon="cube">
-    `pip install agentix-claude-code` ships Claude Code as a typed
-    namespace. Every integration is a regular Python wheel — no YAML,
-    no decorators, no manifest files.
-  </Card>
-  <Card title="Sandboxed by default" icon="lock">
-    Each `RuntimeClient` is an isolated Docker container. Let the
-    agent `rm -rf`; your host is untouched. Swap Docker → Daytona →
-    E2B with one line.
-  </Card>
-  <Card title="Typed remote calls" icon="check">
-    `c.remote(fn, ...)` reads `fn`'s signature. Pyright infers return
-    types end-to-end — you write `cc.patch`, not `cc["patch"]`.
-  </Card>
-  <Card title="Per-namespace venvs" icon="layer-group">
-    Each extension gets its own venv. Mix Aider, OpenHands, and your
-    custom tool in one sandbox without resolving deps across them.
-  </Card>
-  <Card title="Three call shapes, auto-detected" icon="signal">
-    `async def → T` is unary. `yield T` is server-streaming.
-    Add a `Channel[U]` parameter for bidi. The wire follows your
-    signature.
-  </Card>
-  <Card title="Trace fan-out" icon="diagram-project">
-    Every namespace's `agentix.trace.emit(...)` fans out to every
-    subscriber. Wire it to OTel, Sentry, Logfire, or your own bus
-    with `subscribe(handler)`.
-  </Card>
-</CardGroup>
-
-## Get started
+## Read next
 
 <CardGroup cols={2}>
   <Card title="Quick start" icon="rocket" href="/quickstart">
-    Install, deploy a sandbox, call a namespace — in five minutes.
+    Install, deploy a sandbox, call a namespace.
   </Card>
   <Card title="Cookbook" icon="book" href="https://github.com/Agentiix/agentix-cookbook">
-    Worked recipes: Claude Code + SWE-bench, end-to-end.
-  </Card>
-  <Card title="Write a namespace" icon="code" href="/namespace">
-    Wrap your agent CLI as a pip-installable typed remote call.
+    Working recipes — Claude Code + SWE-bench scorer, end-to-end.
   </Card>
   <Card title="Architecture" icon="sitemap" href="/reference/architecture">
-    Dispatcher, runtime layout, wire patterns.
+    Runtime server, namespace workers, deployment backends.
+  </Card>
+  <Card title="Namespace protocol" icon="diagram-project" href="/reference/namespace-protocol">
+    Package layout, entry-point declaration, wire format.
   </Card>
 </CardGroup>
