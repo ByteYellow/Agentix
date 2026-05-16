@@ -20,7 +20,7 @@
       },
       {
         "group": "Guides",
-        "pages": ["plugin-authors"]
+        "pages": ["integrate-agent", "integrate-dataset", "extend-runtime"]
       },
       {
         "group": "Reference",

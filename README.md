@@ -120,7 +120,7 @@ Everything else lives entirely on the host:
 - **Spec resolvers** — internal ordered list in `agentix/cli/_resolve.py`; new spec shapes mean editing that file.
 - **CLI verbs** — ship your own `agentix-yourcmd` `console_scripts` binary; the central CLI is not a plugin surface.
 
-See [`docs/plugin-authors.mdx`](docs/plugin-authors.mdx) for the full plugin authors guide. Rendered site: [agentiix.github.io](https://agentiix.github.io/).
+See [`docs/namespace.mdx`](docs/namespace.mdx) / [`docs/deployment.mdx`](docs/deployment.mdx) for what each axis is, plus the [`docs/integrate-agent.mdx`](docs/integrate-agent.mdx) / [`docs/integrate-dataset.mdx`](docs/integrate-dataset.mdx) / [`docs/extend-runtime.mdx`](docs/extend-runtime.mdx) guides for end-to-end recipes. Rendered site: [agentiix.github.io](https://agentiix.github.io/).
 
 ## Architecture
 
