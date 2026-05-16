@@ -30,15 +30,16 @@ Python entry points.
   <Card title="Quick start" icon="rocket" href="/quickstart">
     Install, write your first namespace, run it inside a sandbox.
   </Card>
-  <Card title="Writing namespaces" icon="cube" href="/plugin-authors#namespaces">
-    The `Namespace` class pattern; `@staticmethod` methods; pyproject setup.
+  <Card title="Namespace" icon="cube" href="/namespace">
+    A Python class whose `@staticmethod` methods are remote-callable
+    inside the sandbox.
   </Card>
-  <Card title="Plugin authors guide" icon="puzzle-piece" href="/plugin-authors">
-    Reference for the two plugin axes: namespaces and deployments.
+  <Card title="Deployment" icon="server" href="/deployment">
+    Host-side backend that provisions sandboxes — `local` / `daytona` /
+    `e2b`, or `pip install` your own.
   </Card>
   <Card title="Architecture" icon="sitemap" href="/reference/architecture">
-    How discovery, dispatch, wire patterns, and the runtime server fit
-    together.
+    How discovery, dispatch, and the runtime server fit together.
   </Card>
   <Card title="Namespace protocol" icon="diagram-project" href="/reference/namespace-protocol">
     The wire-format contract between caller and sandbox.
@@ -47,21 +48,6 @@ Python entry points.
     `agentix build / install / deploy / check`.
   </Card>
 </CardGroup>
-
-## Two plugin axes — the boundary that matters
-
-Plugins exist for the things that cross the host↔sandbox boundary.
-Everything else is plain Python the user imports.
-
-| Axis        | Entry-point group    | What it ships                                                |
-| ----------- | -------------------- | ------------------------------------------------------------ |
-| Namespaces  | `agentix.namespace`  | Python class whose code runs **inside the sandbox**          |
-| Deployments | `agentix.deployment` | host-side backend that **provisions** the sandbox            |
-
-`pip install your-extension` plus one TOML block makes it live. The
-host-side extension hooks — trace sinks, the three built-in wire
-patterns, the CLI dispatcher, spec resolvers — live as ordinary
-functions/classes in `agentix.*` and are not plugin axes.
 
 ## Status
 

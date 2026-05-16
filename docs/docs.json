@@ -15,8 +15,12 @@
         "pages": ["index", "quickstart"]
       },
       {
+        "group": "Concepts",
+        "pages": ["namespace", "deployment"]
+      },
+      {
         "group": "Guides",
-        "pages": ["axes", "plugin-authors"]
+        "pages": ["plugin-authors"]
       },
       {
         "group": "Reference",

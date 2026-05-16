@@ -1,0 +1,135 @@
+---
+title: Namespace
+description: A Python class whose @staticmethod methods are remote-callable inside the sandbox.
+---
+
+A **namespace** is a Python class whose `@staticmethod` methods are
+remote-callable. The class itself is a pure namespace — no instance
+state, no `self`. Callers invoke methods via
+`c.remote(Bash.run, command="ls")`; the runtime reads
+`Bash.run.__module__` as the routing key, imports the class on first
+call, and runs the real method body inside the sandbox.
+
+## Writing one
+
+A namespace is a normal Python project (whatever `uv init --lib`
+produces) plus one entry-point block.
+
+<Tabs>
+  <Tab title="Plugin source">
+    ```python src/agentix/myagent/__init__.py
+    from agentix.namespace import Namespace
+
+    class MyAgent(Namespace):
+        """Optional docstring — surfaces in /namespaces output."""
+
+        @staticmethod
+        async def run(instruction: str) -> str:
+            # real implementation — runs inside the sandbox
+            return f"did: {instruction}"
+    ```
+  </Tab>
+  <Tab title="pyproject.toml">
+    ```toml
+    [project]
+    name = "agentix-myagent"
+    version = "0.1.0"
+    requires-python = ">=3.11"
+
+    [project.entry-points."agentix.namespace"]
+    myagent = "agentix.myagent:MyAgent"
+
+    [tool.hatch.build.targets.wheel]
+    packages = ["src/agentix"]
+    ```
+  </Tab>
+  <Tab title="Layout">
+    ```text
+    agentix-myagent/
+    ├── pyproject.toml
+    └── src/
+        └── agentix/              # PEP 420 namespace package, no __init__.py
+            └── myagent/
+                └── __init__.py   # class MyAgent(Namespace)
+    ```
+  </Tab>
+</Tabs>
+
+`primitives/bash` and `primitives/files` are working in-tree examples.
+
+## Using one
+
+```python
+from agentix import RuntimeClient
+from agentix.bash import Bash
+
+async with RuntimeClient(sandbox.runtime_url) as c:
+    result = await c.remote(Bash.run, command="echo hi")
+    print(result.stdout)        # → "hi\n"
+```
+
+`pip install agentix-bash` is everything the caller needs. The runtime
+discovers the entry point on startup, defers `ep.load()` until the
+first dispatch for the namespace, and caches the loaded class for the
+rest of its life.
+
+<Warning>
+  **Composition over inheritance.** Methods are `@staticmethod`. Do not
+  create an `<Name>Impl` shadow class that inherits from your namespace
+  — the class itself carries the real bodies. If you ever split impl
+  from stub for tests, compose them with `Dispatcher.bind_namespace`
+  rather than inheriting.
+</Warning>
+
+## How discovery works
+
+The runtime walks
+`importlib.metadata.entry_points(group="agentix.namespace")` at startup
+and records each `(name, module:class)` pair. **Nothing is imported
+yet.** The first `POST /_remote` for a given namespace triggers
+`ep.load()` under a per-namespace async lock, and the class becomes
+live for the rest of the runtime's life.
+
+Import errors are cached on the registry entry — a broken namespace
+fails calls to itself but never blocks boot or siblings. There is no
+on-disk manifest the runtime inspects; the wheel's installed metadata
+is the entire discovery contract.
+
+`agentix check` smoke-imports every installed namespace and reports the
+first failure. Two distributions registering the same entry-point name
+collide loudly with `PluginConflictError` — silent last-wins would hide
+a stale install.
+
+## Streaming methods
+
+A method annotated `-> AsyncIterator[T]` opts into the streaming wire.
+
+```python
+from collections.abc import AsyncIterator
+from agentix.namespace import Namespace
+
+class Chatbot(Namespace):
+    @staticmethod
+    async def chat(prompt: str) -> AsyncIterator[str]:
+        proc = await asyncio.create_subprocess_exec("claude", "-p", prompt, ...)
+        async for line in proc.stdout:
+            yield line.decode()
+```
+
+The caller iterates directly — **no `await` on the call site**:
+
+```python
+async for token in c.remote(Chatbot.chat, prompt="…"):
+    print(token, end="")
+```
+
+Items flow over Socket.IO `stream:item` events. See the
+[Namespace protocol](/reference/namespace-protocol) for the full wire
+contract, including bidi and the runtime built-ins (`/exec`,
+`/upload`, `/download`).
+
+## When you write one
+
+Anything you want the trainer or harness to call inside the sandbox —
+a tool, a dataset adapter, a model wrapper, a benchmark scorer, a
+primitive (shell, files, browser).

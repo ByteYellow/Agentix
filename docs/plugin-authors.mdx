@@ -17,11 +17,12 @@ installation in the same environment. No framework patch, no config
 file, no decorator at import time.
 
 The framework's own builtins ship via the same pattern, so every example
-below has an in-tree precedent. Host-side extension hooks (trace sinks,
-the three built-in wire patterns, internal spec resolvers, the CLI
+below has an in-tree precedent. Host-side helpers (trace sinks, the
+three built-in wire patterns, internal spec resolvers, the CLI
 dispatcher) are plain Python APIs — they do not participate in
-entry-point discovery and are documented in
-[The two plugin axes](/axes#host-side-extension-hooks).
+entry-point discovery. See the concept pages —
+[Namespace](/namespace) and [Deployment](/deployment) — for what each
+axis is.
 
 ## Axis index
 
