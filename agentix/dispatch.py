@@ -238,7 +238,7 @@ class Dispatcher:
         finally:
             trace.reset_call_context(tokens)
         try:
-            value = m.return_adapter.dump_python(result, mode="json")
+            value = m.return_adapter.dump_python(result, mode="python")
         except Exception as exc:
             return RemoteResponse(
                 ok=False,
@@ -288,7 +288,7 @@ class Dispatcher:
                 assert m.item_adapter is not None
                 async for item in result:
                     try:
-                        value = m.item_adapter.dump_python(item, mode="json")
+                        value = m.item_adapter.dump_python(item, mode="python")
                     except Exception as exc:
                         yield {"error": RemoteError(
                             type="SerializationError",
@@ -359,7 +359,7 @@ class Dispatcher:
                 assert m.item_adapter is not None
                 async for item in result:
                     try:
-                        value = m.item_adapter.dump_python(item, mode="json")
+                        value = m.item_adapter.dump_python(item, mode="python")
                     except Exception as exc:
                         yield {"error": RemoteError(
                             type="SerializationError",

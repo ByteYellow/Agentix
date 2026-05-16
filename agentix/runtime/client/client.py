@@ -39,6 +39,7 @@ import httpx
 import socketio
 from pydantic import TypeAdapter
 
+from agentix.runtime.codec import pack, unpack
 from agentix.runtime.events import (
     BIDI_END,
     BIDI_END_IN,
@@ -186,13 +187,17 @@ class RuntimeClient:
         package = fn.__module__
         method = fn.__name__
         sig = inspect.signature(fn)
-        body = RemoteRequest(
-            package=package, method=method,
-            args=_encode_args(sig, args), kwargs=_encode_kwargs(sig, kwargs),
+        body = pack({
+            "package": package, "method": method,
+            "args": _encode_args(sig, args),
+            "kwargs": _encode_kwargs(sig, kwargs),
+        })
+        r = await self._client.post(
+            "/_remote", content=body,
+            headers={"Content-Type": "application/msgpack"},
         )
-        r = await self._client.post("/_remote", json=body.model_dump())
         r.raise_for_status()
-        resp = RemoteResponse.model_validate(r.json())
+        resp = RemoteResponse.model_validate(unpack(r.content))
         if not resp.ok:
             assert resp.error is not None
             raise RemoteCallError(package=package, method=method, error=resp.error)
@@ -211,13 +216,13 @@ class RuntimeClient:
         ret_args = get_args(sig.return_annotation)
         item_adapter = TypeAdapter(ret_args[0] if ret_args else Any)
         try:
-            await sio.emit(STREAM, {
+            await sio.emit(STREAM, pack({
                 "call_id": call_id,
                 "package": package,
                 "method": method,
                 "args": _encode_args(sig, args),
                 "kwargs": _encode_kwargs(sig, kwargs),
-            })
+            }))
             while True:
                 kind, data = await q.get()
                 if kind == "end":
@@ -230,7 +235,7 @@ class RuntimeClient:
         finally:
             self._pending.pop(call_id, None)
             with contextlib.suppress(BaseException):
-                await sio.emit(CANCEL, {"call_id": call_id})
+                await sio.emit(CANCEL, pack({"call_id": call_id}))
 
     async def _remote_bidi(self, fn, sig, *args, **kwargs):
         """Bidi over Socket.IO: client emits `bidi:start`, streams inputs as
@@ -271,17 +276,17 @@ class RuntimeClient:
         q: asyncio.Queue = asyncio.Queue()
         self._pending[call_id] = q
 
-        await sio.emit(BIDI_START, {
+        await sio.emit(BIDI_START, pack({
             "call_id": call_id, "package": package, "method": method,
             "args": [], "kwargs": non_stream_kwargs,
-        })
+        }))
 
         async def _sender() -> None:
             try:
                 async for item in input_iter:
-                    encoded = in_adapter.dump_python(item, mode="json")
-                    await sio.emit(BIDI_IN, {"call_id": call_id, "item": encoded})
-                await sio.emit(BIDI_END_IN, {"call_id": call_id})
+                    encoded = in_adapter.dump_python(item, mode="python")
+                    await sio.emit(BIDI_IN, pack({"call_id": call_id, "item": encoded}))
+                await sio.emit(BIDI_END_IN, pack({"call_id": call_id}))
             except Exception:
                 # outer loop will see an error event or close
                 pass
@@ -303,7 +308,7 @@ class RuntimeClient:
                 await sender
             self._pending.pop(call_id, None)
             with contextlib.suppress(BaseException):
-                await sio.emit(CANCEL, {"call_id": call_id})
+                await sio.emit(CANCEL, pack({"call_id": call_id}))
 
     # ── log subscription ────────────────────────────────────────
 
@@ -321,7 +326,7 @@ class RuntimeClient:
         try:
             if first_sub:
                 payload = {"filter": filter} if filter else {}
-                await sio.emit(LOGS_SUBSCRIBE, payload)
+                await sio.emit(LOGS_SUBSCRIBE, pack(payload))
             while True:
                 data = await sub_q.get()
                 yield LogRecord.model_validate(data)
@@ -329,7 +334,7 @@ class RuntimeClient:
             self._log_subscribers.discard(sub_q)
             if not self._log_subscribers:
                 with contextlib.suppress(BaseException):
-                    await sio.emit(LOGS_UNSUBSCRIBE, {})
+                    await sio.emit(LOGS_UNSUBSCRIBE, pack({}))
 
     async def traces(
         self,
@@ -350,7 +355,7 @@ class RuntimeClient:
         first_sub = len(self._trace_subscribers) == 1
         try:
             if first_sub:
-                await sio.emit(TRACES_SUBSCRIBE, {})
+                await sio.emit(TRACES_SUBSCRIBE, pack({}))
             while True:
                 data = await sub_q.get()
                 if kind is not None and data.get("kind") != kind:
@@ -362,7 +367,7 @@ class RuntimeClient:
             self._trace_subscribers.discard(sub_q)
             if not self._trace_subscribers:
                 with contextlib.suppress(BaseException):
-                    await sio.emit(TRACES_UNSUBSCRIBE, {})
+                    await sio.emit(TRACES_UNSUBSCRIBE, pack({}))
 
     # ── Socket.IO connection management ─────────────────────────
 
@@ -394,17 +399,20 @@ class RuntimeClient:
             self._sio = sio
             return sio
 
-    async def _dispatch_event(self, kind: str, data: dict[str, Any]) -> None:
+    async def _dispatch_event(self, kind: str, raw: Any) -> None:
+        data = unpack(raw) if isinstance(raw, (bytes, bytearray, memoryview)) else raw
         call_id = data.get("call_id")
         q = self._pending.get(call_id) if isinstance(call_id, str) else None
         if q is not None:
             await q.put((kind, data))
 
-    async def _on_log(self, data: dict[str, Any]) -> None:
+    async def _on_log(self, raw: Any) -> None:
+        data = unpack(raw) if isinstance(raw, (bytes, bytearray, memoryview)) else raw
         for q in list(self._log_subscribers):
             q.put_nowait(data)
 
-    async def _on_trace(self, data: dict[str, Any]) -> None:
+    async def _on_trace(self, raw: Any) -> None:
+        data = unpack(raw) if isinstance(raw, (bytes, bytearray, memoryview)) else raw
         for q in list(self._trace_subscribers):
             q.put_nowait(data)
 
@@ -414,8 +422,9 @@ class RuntimeClient:
 
 def _encode_args(sig: inspect.Signature, args: tuple) -> list[Any]:
     """Encode positional args via each parameter's TypeAdapter so dataclasses,
-    BaseModels and other pydantic-known types serialise to JSON-compatible
-    structures. Falls back to the raw value if no annotation is available.
+    BaseModels, ndarrays, and other native Python types pass through msgpack
+    cleanly (mode="python" — msgpack ext types handle ndarray + BaseModel
+    natively; no JSON intermediate).
     """
     out: list[Any] = []
     params = list(sig.parameters.values())
@@ -426,7 +435,7 @@ def _encode_args(sig: inspect.Signature, args: tuple) -> list[Any]:
             else Any
         )
         try:
-            out.append(TypeAdapter(ann).dump_python(v, mode="json"))
+            out.append(TypeAdapter(ann).dump_python(v, mode="python"))
         except Exception:
             out.append(v)
     return out
@@ -443,7 +452,7 @@ def _encode_kwargs(sig: inspect.Signature, kwargs: dict[str, Any]) -> dict[str, 
             else Any
         )
         try:
-            out[k] = TypeAdapter(ann).dump_python(v, mode="json")
+            out[k] = TypeAdapter(ann).dump_python(v, mode="python")
         except Exception:
             out[k] = v
     return out

@@ -25,14 +25,14 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from agentix import __version__
+from agentix.runtime.codec import pack, unpack
 from agentix.runtime.models import (
     HealthResponse,
     NamespaceInfo,
     RemoteRequest,
-    RemoteResponse,
 )
 from agentix.runtime.multiplexer import NamespaceMultiplexer
 from agentix.runtime.server.llm_proxy import router as llm_proxy_router
@@ -82,21 +82,31 @@ async def list_namespaces() -> list[NamespaceInfo]:
 
 
 @app.post("/_remote")
-async def remote_call(request: RemoteRequest) -> RemoteResponse:
+async def remote_call(request: Request) -> Response:
     """Unary dispatch endpoint. Spawns the worker on first call.
+
+    Body: msgpack-encoded `{"package", "method", "args", "kwargs", "call_id"}`.
+    Response: msgpack-encoded RemoteResponse dict. Always 200 — error info
+    lives inside the response body (`{"ok": false, "error": {...}}`).
+    Only "namespace not loaded" returns 404.
 
     Streaming and bidirectional methods are NOT served here — they
     live on the Socket.IO connection at `/socket.io/`. The worker
     itself rejects mismatches via the wire-pattern errors returned in
     `RemoteResponse.error`.
     """
+    body = await request.body()
+    raw = unpack(body)
+    req = RemoteRequest.model_validate(raw)
     multiplexer: NamespaceMultiplexer = app.state.multiplexer
-    if not multiplexer.has(request.package):
+    if not multiplexer.has(req.package):
         raise HTTPException(
             status_code=404,
-            detail=f"namespace not loaded: package={request.package!r}",
+            detail=f"namespace not loaded: package={req.package!r}",
         )
-    return await multiplexer.dispatch_unary(request)
+    resp = await multiplexer.dispatch_unary(req)
+    return Response(content=pack(resp.model_dump(mode="python")),
+                    media_type="application/msgpack")
 
 
 # ── Compose ASGI app: FastAPI for HTTP, Socket.IO for streams/logs ──

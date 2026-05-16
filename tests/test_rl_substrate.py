@@ -46,14 +46,16 @@ async def test_trace_emit_received_by_subscriber(
 
         collector = asyncio.create_task(_collect())
         await asyncio.sleep(0.2)
-        body = RemoteRequest(
+        from agentix.runtime.codec import pack, unpack
+        body = pack(RemoteRequest(
             package=Tracer.__module__, method="step",
             kwargs={"label": "hi"}, call_id="rollout-7",
-        ).model_dump()
+        ).model_dump())
         async with httpx.AsyncClient(base_url=base_url) as http:
-            r = await http.post("/_remote", json=body)
+            r = await http.post("/_remote", content=body,
+                                headers={"Content-Type": "application/msgpack"})
             assert r.status_code == 200
-            assert r.json() == {"ok": True, "value": 42, "error": None}
+            assert unpack(r.content) == {"ok": True, "value": 42, "error": None}
 
         await asyncio.wait_for(collector, timeout=5)
 
@@ -79,12 +81,14 @@ async def test_trace_filter_by_kind(runtime_module, register_namespace, live_ser
 
         collector = asyncio.create_task(_collect())
         await asyncio.sleep(0.2)
-        body = RemoteRequest(
+        from agentix.runtime.codec import pack
+        body = pack(RemoteRequest(
             package=Tracer.__module__, method="step",
             kwargs={"label": "x"}, call_id="r-1",
-        ).model_dump()
+        ).model_dump())
         async with httpx.AsyncClient(base_url=base_url) as http:
-            await http.post("/_remote", json=body)
+            await http.post("/_remote", content=body,
+                            headers={"Content-Type": "application/msgpack"})
         await asyncio.wait_for(collector, timeout=5)
 
     assert len(received) == 1

@@ -100,6 +100,7 @@ async def test_register_namespace_makes_it_dispatchable(
 
     assert server.multiplexer.has(pkg)
 
+    from agentix.runtime.codec import pack, unpack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
         r = await http.get("/namespaces")
@@ -107,20 +108,23 @@ async def test_register_namespace_makes_it_dispatchable(
         pkgs = [c["manifest"]["package"] for c in r.json()]
         assert pkg in pkgs
 
-        body = RemoteRequest(
+        body = pack(RemoteRequest(
             package=pkg, method="echo", kwargs={"msg": "hi"},
-        ).model_dump()
-        r = await http.post("/_remote", json=body)
+        ).model_dump())
+        r = await http.post("/_remote", content=body,
+                            headers={"Content-Type": "application/msgpack"})
         assert r.status_code == 200
-        assert r.json() == {"ok": True, "value": {"msg": "echo:hi"}, "error": None}
+        assert unpack(r.content) == {"ok": True, "value": {"msg": "echo:hi"}, "error": None}
 
 
 async def test_remote_call_unknown_package_404(runtime_module):
     server, _, _ = runtime_module
+    from agentix.runtime.codec import pack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
-        body = RemoteRequest(package="agentix.nope", method="x").model_dump()
-        r = await http.post("/_remote", json=body)
+        body = pack(RemoteRequest(package="agentix.nope", method="x").model_dump())
+        r = await http.post("/_remote", content=body,
+                            headers={"Content-Type": "application/msgpack"})
         assert r.status_code == 404
 
 
@@ -129,16 +133,18 @@ async def test_remote_call_unknown_method_returns_error_body(
 ):
     server, _, _ = runtime_module
     register_namespace(Echo)
+    from agentix.runtime.codec import pack, unpack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
-        body = RemoteRequest(
+        body = pack(RemoteRequest(
             package=Echo.__module__, method="not_a_method",
-        ).model_dump()
-        r = await http.post("/_remote", json=body)
+        ).model_dump())
+        r = await http.post("/_remote", content=body,
+                            headers={"Content-Type": "application/msgpack"})
         assert r.status_code == 200  # 200 with ok=False; wire stays clean
-        body_json = r.json()
-        assert body_json["ok"] is False
-        assert body_json["error"]["type"] == "MethodNotFound"
+        resp = unpack(r.content)
+        assert resp["ok"] is False
+        assert resp["error"]["type"] == "MethodNotFound"
 
 
 async def test_impl_exception_surfaces_as_remote_error(
@@ -146,15 +152,17 @@ async def test_impl_exception_surfaces_as_remote_error(
 ):
     server, _, _ = runtime_module
     register_namespace(Boom)
+    from agentix.runtime.codec import pack, unpack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
-        body = RemoteRequest(package=Boom.__module__, method="go").model_dump()
-        r = await http.post("/_remote", json=body)
+        body = pack(RemoteRequest(package=Boom.__module__, method="go").model_dump())
+        r = await http.post("/_remote", content=body,
+                            headers={"Content-Type": "application/msgpack"})
         assert r.status_code == 200
-        body_json = r.json()
-        assert body_json["ok"] is False
-        assert body_json["error"]["type"] == "RuntimeError"
-        assert "kaboom" in body_json["error"]["message"]
+        resp = unpack(r.content)
+        assert resp["ok"] is False
+        assert resp["error"]["type"] == "RuntimeError"
+        assert "kaboom" in resp["error"]["message"]
 
 
 async def test_client_remote_round_trip(

@@ -12,6 +12,10 @@ dependencies = [
     # Streams, bidi, and log subscription multiplex over a single Socket.IO
     # connection. The same package is both client and server.
     "python-socketio[asyncio-client]>=5.11",
+    # Wire codec — msgpack for all RPC frames + Socket.IO event payloads.
+    # Cross-language, no base64 overhead, native bytes, extension types
+    # for ndarray + pydantic models.
+    "msgpack>=1.0",
 ]
 
 [project.optional-dependencies]

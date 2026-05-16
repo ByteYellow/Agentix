@@ -24,6 +24,7 @@ import socketio
 
 import agentix.trace as trace
 from agentix.idents import CallId, PackageName
+from agentix.runtime.codec import pack
 from agentix.runtime.events import TRACE, TRACES_ROOM
 from agentix.runtime.models import TraceEvent
 
@@ -48,7 +49,7 @@ def install_trace_bridge(sio: socketio.AsyncServer):
             kind=kind, payload=payload, timestamp=trace.now(),
             call_id=call_id, source=source,  # type: ignore[arg-type]
         )
-        loop.create_task(sio.emit(TRACE, event.model_dump(mode="json"), room=TRACES_ROOM))
+        loop.create_task(sio.emit(TRACE, pack(event.model_dump(mode="python")), room=TRACES_ROOM))
 
     # Path 1: in-process workers' trace.emit() flows through this handler.
     trace.subscribe(_emit)
