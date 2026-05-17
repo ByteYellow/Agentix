@@ -23,25 +23,39 @@ because the rest of the framework uses it.
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 
 import msgpack
 from pydantic import BaseModel
 
-try:
-    import numpy as np  # type: ignore[reportMissingImports]
-    _HAS_NUMPY = True
-except ImportError:
-    _HAS_NUMPY = False
+# numpy is an optional dep. Importing it eagerly costs ~400 ms (it
+# pulls in a sizeable C-extension graph) and the framework's hot path
+# never needs it unless an ndarray actually shows up on the wire — so
+# we check for the dist via `find_spec` (no heavy work) and defer the
+# real import to first ndarray encode/decode.
+_HAS_NUMPY = importlib.util.find_spec("numpy") is not None
+_np: Any = None       # populated lazily by `_numpy()`
 
 _EXT_NDARRAY = 1
 _EXT_PYDANTIC = 2
 
 
+def _numpy() -> Any:
+    """Lazy numpy import. Cached on the module."""
+    global _np
+    if _np is None:
+        import numpy  # noqa: PLC0415 — intentional lazy import
+        _np = numpy
+    return _np
+
+
 def _encode_ext(obj: Any) -> msgpack.ExtType:
-    if _HAS_NUMPY and isinstance(obj, np.ndarray):
-        header = f"{obj.dtype.str}|{','.join(map(str, obj.shape))}".encode()
-        return msgpack.ExtType(_EXT_NDARRAY, header + b"\x00" + obj.tobytes())
+    if _HAS_NUMPY:
+        np = _numpy()
+        if isinstance(obj, np.ndarray):
+            header = f"{obj.dtype.str}|{','.join(map(str, obj.shape))}".encode()
+            return msgpack.ExtType(_EXT_NDARRAY, header + b"\x00" + obj.tobytes())
     if isinstance(obj, BaseModel):
         payload = msgpack.packb(
             obj.model_dump(mode="python"),
@@ -55,6 +69,7 @@ def _decode_ext(code: int, data: bytes) -> Any:
     if code == _EXT_NDARRAY:
         if not _HAS_NUMPY:
             raise RuntimeError("ndarray ext received but numpy not installed")
+        np = _numpy()
         header, raw = data.split(b"\x00", 1)
         dtype_str, shape_str = header.decode().split("|")
         shape = tuple(int(s) for s in shape_str.split(",") if s)

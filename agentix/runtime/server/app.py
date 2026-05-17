@@ -25,7 +25,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, Request, Response
 
 from agentix import __version__
 from agentix.runtime.server.llm_proxy import router as llm_proxy_router
@@ -99,11 +99,9 @@ async def remote_call(request: Request) -> Response:
     raw = unpack(body)
     req = RemoteRequest.model_validate(raw)
     multiplexer: NamespaceMultiplexer = _fastapi_app.state.multiplexer
-    if not multiplexer.has(req.package):
-        raise HTTPException(
-            status_code=404,
-            detail=f"namespace not loaded: package={req.package!r}",
-        )
+    # No pre-flight has() — `dispatch_unary` already returns a structured
+    # PackageNotLoaded error in-band when the module can't be found or
+    # auto-registered. Wire stays 200, error info lives in the body.
     resp = await multiplexer.dispatch_unary(req)
     return Response(content=pack(resp.model_dump(mode="python")),
                     media_type="application/msgpack")

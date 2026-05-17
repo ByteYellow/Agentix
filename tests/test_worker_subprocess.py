@@ -67,10 +67,13 @@ async def test_subprocess_worker_bad_target_fails_without_hanging(worker_env):
         dist_name="missing-worker",
     )
     try:
+        # Worker subprocess pays pydantic_core's one-time init cost
+        # (~4s on some machines) before it can fail. Budget = the
+        # multiplexer's own _WORKER_START_TIMEOUT (15s) plus a hair.
         with pytest.raises(RuntimeError, match="failed to boot|exited before ready"):
             await asyncio.wait_for(mp.dispatch_unary(RemoteRequest(
                 package="agentix.missing", method="x",
-            )), timeout=5)
+            )), timeout=20)
     finally:
         await mp.shutdown()
 

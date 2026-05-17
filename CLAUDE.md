@@ -113,15 +113,20 @@ Downstream repos (`Agentix-Agents-Hub`, `Agentix-Datasets`) follow the
 same shape — each one is a Python project declaring `agentix.namespace`
 entry points, installed alongside core.
 
-## Architecture (typed Python namespaces, entry-point discovery)
+## Architecture (dispatch + entry-point discovery)
 
-A namespace is a **Python package** (`agentix.<short>`) whose top-level async functions are the remote-callable surface. Caller-side, `c.remote(bash.run, ...)` reads `bash.run.__module__` as the routing key. Server-side, the runtime walks `importlib.metadata.entry_points(group="agentix.namespace")` to discover packages, then **spawns one worker subprocess per namespace** (using each namespace's own venv interpreter) and forwards RPC frames over stdin/stdout — full per-extension dep isolation, no in-process import of namespace code.
+`c.remote(fn, ...)` reads exactly two things off `fn`: `fn.__module__` (the wire's `package` routing key) and `fn.__name__` (the method). The runtime maintains a `package → worker subprocess` table; on dispatch, it finds (or lazily registers) the worker for that module, forwards the call, returns the typed result. Nothing in the dispatch path requires `agentix.*` import paths or entry-point declarations — any importable Python module is a valid target.
+
+The framework distinguishes two cases that hit the same dispatch:
+
+* **Plugins** — reusable Python packages distributed via PyPI that ship under `agentix.<short>` so every consumer can `from agentix import bash` uniformly. Declare an `agentix.namespace` entry point so they show up in `agentix check`, get pre-discovered at startup, and (in bundle images) get their own dep-isolated venv at `/nix/<short>/`.
+* **User projects** — your own code at your own module path (`my_company.agents.tasks`). **No entry point required. No `agentix.*` import path required. No `src/agentix/` PEP 420 layout required.** The runtime auto-registers any importable module on first dispatch: it probes each known venv interpreter, finds one that can `import <module>`, and spawns a worker there. Just `pip install -e .` your project somewhere the runtime can see (alongside the framework in dev mode, or installed into the bundle in production) and call `c.remote(my_module.fn, ...)`.
 
 The other plugin axis — deployments — is documented in `docs/deployment.mdx`; host-side hooks (trace pub/sub, wire patterns, spec resolvers, CLI verbs) are in `docs/extend-runtime.mdx`.
 
-### The extension contract
+### The plugin contract (for reusable packages)
 
-A namespace is a normal Python distribution that declares one `agentix.namespace` entry point pointing at the package:
+A plugin is a normal Python distribution that declares one `agentix.namespace` entry point pointing at the package:
 
 ```toml
 # pyproject.toml — the entire framework-facing surface
@@ -131,9 +136,9 @@ bash = "agentix.bash"
 
 That's it. Key (`bash`) is the short name for display; value (`agentix.bash`) is the Python import path of the namespace package. The framework imports that module and discovers its async functions on first dispatch. (A legacy `module:Class` form is also accepted — `discover_methods` is duck-typed — but module-as-namespace is the recommended shape.)
 
-### Namespace source layout
+### Plugin source layout
 
-A namespace is a **normal Python project** (the shape `uv init --lib` produces) that contributes to the `agentix.*` import namespace:
+A plugin is a **normal Python project** (the shape `uv init --lib` produces) that contributes to the `agentix.*` import namespace:
 
 ```
 Agentix-Runtime-Basic/                 # one such project; the `bash` + `files`
@@ -143,9 +148,33 @@ Agentix-Runtime-Basic/                 # one such project; the `bash` + `files`
     └── files/__init__.py              # async def upload(...), async def download(...), …
 ```
 
-The framework's `agentix/__init__.py` extends its `__path__` via `pkgutil.extend_path`, so once a namespace dist installs files at `<site-packages>/agentix/bash/`, `from agentix import bash` resolves and `bash.run` is the remote-callable function. Multiple namespace dists can install peer entries under `agentix/` without colliding.
+The framework's `agentix/__init__.py` extends its `__path__` via `pkgutil.extend_path`, so once a plugin dist installs files at `<site-packages>/agentix/bash/`, `from agentix import bash` resolves and `bash.run` is the remote-callable function. Multiple plugin dists can install peer entries under `agentix/` without colliding.
 
-Reserved by the framework — namespace dists may not shadow: `agentix.cli`, `agentix.deployment`, `agentix.dispatch`, `agentix.idents`, `agentix.models`, `agentix.namespace`, `agentix.rollout`, `agentix.runtime`, `agentix.trace`. Everything else under `agentix.*` is fair game.
+Reserved by the framework — plugin dists may not shadow: `agentix.cli`, `agentix.deployment`, `agentix.dispatch`, `agentix.idents`, `agentix.models`, `agentix.namespace`, `agentix.rollout`, `agentix.runtime`, `agentix.trace`. Everything else under `agentix.*` is fair game.
+
+### User-project layout (the path of least resistance)
+
+If you're just *using* Agentix — not authoring a reusable plugin — you don't need any of the above. Drop your code at your usual module path, declare nothing, dispatch:
+
+```
+my-rl-experiment/
+├── pyproject.toml         # name = "my-rl-experiment", no `agentix.namespace` entry points
+└── src/my_rl_experiment/
+    └── tasks.py           # async def rollout(...): ..., async def score(...): ...
+```
+
+```python
+from agentix import RuntimeClient
+from my_rl_experiment import tasks   # your own import path; no agentix.* dance
+
+async with RuntimeClient(sandbox.runtime_url) as c:
+    traj = await c.remote(tasks.rollout, seed=42)
+    reward = await c.remote(tasks.score, trajectory=traj)
+```
+
+The multiplexer auto-registers `my_rl_experiment.tasks` on the first call: it probes each known venv interpreter (the runtime's own in dev mode; each `/nix/<short>/` in bundle mode) for one that can import the module, then spawns a worker there. As long as `pip install -e .` succeeded somewhere on the runtime's path, dispatch works.
+
+`agentix build .` packages the current project into the bundle image — no entry-point declaration required. The short name for the image tag defaults to the dist name (`my-rl-experiment` → `my-rl-experiment:0.1.0`) when no entry point is declared.
 
 ### The package IS the namespace
 

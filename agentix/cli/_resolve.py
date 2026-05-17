@@ -44,13 +44,31 @@ def read_pyproject(namespace_dir: Path) -> dict:
 
 
 def _short_from_pyproject(pyproject: dict) -> str:
-    """`agentix-bash` → `bash`."""
-    name = pyproject.get("project", {}).get("name", "")
-    if not isinstance(name, str) or not name.startswith("agentix-"):
+    """Derive the build-time short name for a pyproject.
+
+    Priority:
+      1. First key in `[project.entry-points."agentix.namespace"]` —
+         the plugin's own self-declared short name. This is the canonical
+         source for plugin builds.
+      2. `[project].name` with an optional `agentix-` prefix stripped.
+         For user projects that don't declare a namespace entry point at
+         all, this is what gets used (e.g. `my-rl-experiment` → `my-rl-experiment`).
+
+    The short name only affects the image tag and the bundle layout —
+    routing on the wire is by `fn.__module__`, which is determined by
+    the user's actual Python import path.
+    """
+    project = pyproject.get("project", {})
+    ep_group = project.get("entry-points", {}).get("agentix.namespace", {})
+    if isinstance(ep_group, dict) and ep_group:
+        return next(iter(ep_group))
+    name = project.get("name", "")
+    if not isinstance(name, str) or not name:
         raise SystemExit(
-            f"pyproject.toml: name {name!r} must start with `agentix-`"
+            "pyproject.toml: [project].name is required when no "
+            "[project.entry-points.\"agentix.namespace\"] is declared"
         )
-    return name[len("agentix-"):]
+    return name.removeprefix("agentix-")
 
 
 def _short_from_image(ref: str) -> str:

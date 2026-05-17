@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib.metadata
+import importlib.util
 import logging
 import os
 import sys
@@ -408,10 +409,30 @@ def _new_id() -> str:
 
 
 class NamespaceMultiplexer:
-    """Owns the namespace → worker mapping; routes dispatches."""
+    """Owns the package → worker mapping; routes dispatches.
+
+    Two dispatch paths:
+
+    1. **Plugins**: discovered via the `agentix.namespace` entry-point
+       group at startup. Every plugin gets a pre-registered entry —
+       `c.remote(bash.run, …)` immediately knows which venv to spawn
+       the worker in.
+    2. **Arbitrary user modules**: any importable Python module is a
+       valid dispatch target. On first call to a package not in
+       `_entries`, the multiplexer probes each known venv interpreter
+       to see if the module imports there; first match wins and gets
+       cached as a new `_NamespaceEntry`. No entry point, no
+       `agentix.*` prefix, no boilerplate — `c.remote(my_app.tasks.run, …)`
+       works as long as `my_app.tasks` is `pip install`-ed somewhere
+       the runtime can see.
+    """
 
     def __init__(self, trace_forwarder: TraceForwarder | None = None) -> None:
         self._entries: dict[str, _NamespaceEntry] = {}    # package → entry
+        # Every venv interpreter we know about (from entry-point discovery
+        # or test registrations). On unknown-package dispatch, we try each
+        # one in turn — first that can import the module gets registered.
+        self._venv_pythons: list[tuple[str, Path | None]] = []  # (python, bin_dir)
         self._trace_forwarder = trace_forwarder
 
     # ── discovery ───────────────────────────────────────────────────
@@ -454,6 +475,9 @@ class NamespaceMultiplexer:
                 continue
             site_pkgs = site_pkgs_candidates[0]
             bin_dir = venv / "bin"
+            # Record the venv even if it carries no entry points — on-demand
+            # registration will probe it for arbitrary user modules.
+            self._venv_pythons.append((str(python), bin_dir))
             for dist in importlib.metadata.distributions(path=[str(site_pkgs)]):
                 for ep in dist.entry_points:
                     if ep.group != NAMESPACE_ENTRY_POINT_GROUP:
@@ -470,6 +494,9 @@ class NamespaceMultiplexer:
                     )
 
     def _discover_from_current_env(self) -> None:
+        # Always make sys.executable available for on-demand registration,
+        # even if no plugin entry points are installed.
+        self._venv_pythons.append((sys.executable, None))
         eps = importlib.metadata.entry_points()
         selected = (
             eps.select(group=NAMESPACE_ENTRY_POINT_GROUP)
@@ -534,10 +561,60 @@ class NamespaceMultiplexer:
             ))
         return out
 
+    # ── on-demand registration for arbitrary modules ────────────────
+
+    def _auto_register(self, package: str) -> bool:
+        """Try to register `package` against any known venv.
+
+        For dispatch to an unknown package, we check each discovered
+        interpreter (the runtime venv in dev mode; each `/nix/<short>/`
+        venv in bundle mode) for whether the module is importable.
+        First match wins.
+
+        Fast path: the runtime's own Python tries `importlib.util.find_spec`
+        in-process (no subprocess). Slow path: for other venvs we
+        subprocess-probe with `python -c 'import <pkg>'`.
+
+        Returns True iff the module was registered.
+        """
+        # Fast path: this Python.
+        try:
+            if importlib.util.find_spec(package) is not None:
+                self._entries[package] = _NamespaceEntry(
+                    package=package, dist_name="", dist_version="",
+                    target=package, python=sys.executable,
+                )
+                return True
+        except (ImportError, ValueError):
+            pass
+
+        # Slow path: other venvs we know about.
+        import subprocess  # local: not used elsewhere in hot path
+        for python, bin_dir in self._venv_pythons:
+            if python == sys.executable:
+                continue   # already tried above
+            try:
+                rc = subprocess.run(
+                    [python, "-c", f"import {package}"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=5,
+                ).returncode
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                continue
+            if rc == 0:
+                self._entries[package] = _NamespaceEntry(
+                    package=package, dist_name="", dist_version="",
+                    target=package, python=python, bin_dir=bin_dir,
+                )
+                return True
+        return False
+
     # ── worker lifecycle ────────────────────────────────────────────
 
     async def _get_worker(self, package: str):
         entry = self._entries.get(package)
+        if entry is None and self._auto_register(package):
+            entry = self._entries[package]
         if entry is None:
             raise KeyError(package)
         if entry.worker is not None:

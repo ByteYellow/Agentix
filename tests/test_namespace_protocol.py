@@ -133,15 +133,24 @@ async def test_register_namespace_makes_it_dispatchable(
         assert unpack(r.content) == {"ok": True, "value": {"msg": "echo:hi"}, "error": None}
 
 
-async def test_remote_call_unknown_package_404(runtime_module):
+async def test_remote_call_unknown_package_returns_error_body(runtime_module):
+    """An unimportable package returns a PackageNotLoaded error in-band
+    (wire stays 200), not a 404. The pre-flight has() check was removed
+    because it duplicated the multiplexer's own error path AND violated
+    the framework's 'wire stays 200, errors live in the body' policy."""
     server, _, _ = runtime_module
-    from agentix.runtime.shared.codec import pack
+    from agentix.runtime.shared.codec import pack, unpack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
-        body = pack(RemoteRequest(package="agentix.nope", method="x").model_dump())
+        body = pack(RemoteRequest(
+            package="agentix.really.does.not.exist", method="x",
+        ).model_dump())
         r = await http.post("/_remote", content=body,
                             headers={"Content-Type": "application/msgpack"})
-        assert r.status_code == 404
+        assert r.status_code == 200
+        resp = unpack(r.content)
+        assert resp["ok"] is False
+        assert resp["error"]["type"] == "PackageNotLoaded"
 
 
 async def test_remote_call_unknown_method_returns_error_body(
