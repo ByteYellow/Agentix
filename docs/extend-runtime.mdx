@@ -41,6 +41,29 @@ Handler errors are caught and logged — tracing never breaks a rollout.
 Blocking handlers slow the entire runtime; offload heavy work to a
 background task.
 
+## RL bridge with abridge
+
+[abridge](https://github.com/Agentiix/abridge) is the host-side bridge
+from Agentix rollout traces to RL training pipelines. It connects to a
+running runtime, subscribes to trace events, correlates LLM requests,
+tool calls, rewards, and rollout endings into per-rollout records, then
+pushes those records to a sink.
+
+```python
+import asyncio
+import abridge
+
+class MySink:
+    async def push(self, rollout: abridge.Rollout) -> None:
+        ...
+
+asyncio.run(abridge.run("http://localhost:8000", MySink()))
+```
+
+Framework adapters can implement `abridge.Sink` for slime, verl, or an
+internal training buffer without adding trainer dependencies to the
+core Agentix package.
+
 ## Call shapes
 
 Three shapes are detected by `agentix.dispatch.detect_shape(fn)` from

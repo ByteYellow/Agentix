@@ -22,7 +22,7 @@ import httpx
 import pytest
 
 from agentix import Channel, RemoteCallError, RuntimeClient
-from agentix.runtime.models import RemoteRequest
+from agentix.runtime.shared.models import RemoteRequest
 
 pytestmark = pytest.mark.asyncio
 
@@ -116,7 +116,7 @@ async def test_register_namespace_makes_it_dispatchable(
 
     assert server.multiplexer.has(pkg)
 
-    from agentix.runtime.codec import pack, unpack
+    from agentix.runtime.shared.codec import pack, unpack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
         r = await http.get("/namespaces")
@@ -135,7 +135,7 @@ async def test_register_namespace_makes_it_dispatchable(
 
 async def test_remote_call_unknown_package_404(runtime_module):
     server, _, _ = runtime_module
-    from agentix.runtime.codec import pack
+    from agentix.runtime.shared.codec import pack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
         body = pack(RemoteRequest(package="agentix.nope", method="x").model_dump())
@@ -149,7 +149,7 @@ async def test_remote_call_unknown_method_returns_error_body(
 ):
     server, _, _ = runtime_module
     register_namespace(Echo)
-    from agentix.runtime.codec import pack, unpack
+    from agentix.runtime.shared.codec import pack, unpack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
         body = pack(RemoteRequest(
@@ -168,7 +168,7 @@ async def test_impl_exception_surfaces_as_remote_error(
 ):
     server, _, _ = runtime_module
     register_namespace(Boom)
-    from agentix.runtime.codec import pack, unpack
+    from agentix.runtime.shared.codec import pack, unpack
     transport = httpx.ASGITransport(app=server.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
         body = pack(RemoteRequest(package=Boom.__module__, method="go").model_dump())

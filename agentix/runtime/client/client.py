@@ -42,8 +42,8 @@ from pydantic import TypeAdapter
 
 from agentix.dispatch import detect_shape
 from agentix.rpc import Bidi, Channel, Stream, Unary, is_channel_annotation
-from agentix.runtime.codec import pack, unpack
-from agentix.runtime.events import (
+from agentix.runtime.shared.codec import pack, unpack
+from agentix.runtime.shared.events import (
     BIDI_END,
     BIDI_END_IN,
     BIDI_ERROR,
@@ -62,7 +62,7 @@ from agentix.runtime.events import (
     TRACES_SUBSCRIBE,
     TRACES_UNSUBSCRIBE,
 )
-from agentix.runtime.models import (
+from agentix.runtime.shared.models import (
     HealthResponse,
     LogRecord,
     NamespaceInfo,

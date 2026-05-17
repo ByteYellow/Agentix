@@ -35,7 +35,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from agentix._plugin import Registry
+from agentix.deployment._plugin import Registry
 from agentix.idents import SandboxId
 from agentix.models import SandboxConfig, SandboxInfo
 

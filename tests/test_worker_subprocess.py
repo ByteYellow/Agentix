@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from agentix.runtime.models import RemoteRequest
-from agentix.runtime.multiplexer import NamespaceMultiplexer
+from agentix.runtime.server.multiplexer import NamespaceMultiplexer
+from agentix.runtime.shared.models import RemoteRequest
 
 TESTS_DIR = Path(__file__).parent
 _PACKAGE = "_worker_target"

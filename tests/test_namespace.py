@@ -19,7 +19,7 @@ import pytest
 from agentix import Channel
 from agentix.dispatch import Dispatcher, detect_shape
 from agentix.namespace import discover_methods
-from agentix.runtime.models import RemoteRequest
+from agentix.runtime.shared.models import RemoteRequest
 
 # ── Namespace method discovery ──────────────────────────────────────
 

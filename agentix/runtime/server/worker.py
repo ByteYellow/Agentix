@@ -1,11 +1,11 @@
-"""Namespace worker — `python -m agentix.runtime.worker --target <pkg>`.
+"""Namespace worker — `python -m agentix.runtime.server.worker --target <pkg>`.
 
 A worker is a single-namespace dispatch process that the runtime
 multiplexer spawns lazily on first call. It loads ONE namespace target
 (typically a Python package, but a `module:attr` form is also accepted
 for class-style or partial targets), binds it via `Dispatcher`, and
 serves dispatch over stdin/stdout using the RPC frame protocol in
-`agentix.runtime.rpc`.
+`agentix.runtime.shared.rpc`.
 
 The worker holds:
 
@@ -32,12 +32,12 @@ from typing import Any
 from agentix import trace
 from agentix.dispatch import Dispatcher
 from agentix.idents import CallId, PackageName
-from agentix.runtime import _pump
-from agentix.runtime import frames as F
-from agentix.runtime.models import RemoteError, RemoteRequest
-from agentix.runtime.rpc import read_frame, write_frame
+from agentix.runtime.shared import frames as F
+from agentix.runtime.shared import pump as _pump
+from agentix.runtime.shared.models import RemoteError, RemoteRequest
+from agentix.runtime.shared.rpc import read_frame, write_frame
 
-logger = logging.getLogger("agentix.runtime.worker")
+logger = logging.getLogger("agentix.runtime.server.worker")
 
 
 def _load_target(target: str) -> Any:
@@ -346,7 +346,7 @@ async def _amain(target: str) -> None:
     except Exception as exc:
         # Worker hasn't initialized stdio framing yet; bootstrap a minimal
         # writer so the multiplexer learns why we're exiting.
-        from agentix.runtime.rpc import pack_frame
+        from agentix.runtime.shared.rpc import pack_frame
         sys.stdout.buffer.write(pack_frame({"type": F.BOOT_ERROR, "error": _err(exc)}))
         sys.stdout.buffer.flush()
         sys.exit(1)
@@ -360,7 +360,7 @@ def main() -> None:
         stream=sys.stderr,
         format="%(asctime)s [%(name)s] %(message)s",
     )
-    parser = argparse.ArgumentParser(prog="agentix.runtime.worker")
+    parser = argparse.ArgumentParser(prog="agentix.runtime.server.worker")
     parser.add_argument(
         "--target", required=True,
         help="namespace to load — `module.path` (recommended, package-as-namespace) "

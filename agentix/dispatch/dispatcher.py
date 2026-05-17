@@ -1,33 +1,31 @@
-"""Namespace dispatch — binds a target's public functions for RPC.
+"""`Dispatcher` — a namespace's collection of bound (stub, impl) pairs.
 
-`Dispatcher.bind_namespace(target)` walks `target` (a module or class) for
-public async/sync functions and pre-builds pydantic `TypeAdapter`s for each
-parameter and return type from `inspect.signature`. `dispatch` /
-`dispatch_stream` / `dispatch_bidi` coerce wire-decoded args back into the
-declared types and invoke the impl.
+Namespaces construct one of these implicitly via `bind_namespace(target)`;
+explicit `bind(stub, impl)` is for namespaces using the composition-impl
+shape (separate stub class + impl class, see CLAUDE.md R1).
 
-The runtime's multiplexer instantiates one Dispatcher per namespace inside
-a worker subprocess; in-process tests bind directly via
-`multiplexer.register_inprocess(target)`.
+`dispatch` / `dispatch_stream` / `dispatch_bidi` coerce wire-decoded args
+back into the declared types, invoke the impl, and trap exceptions into
+RemoteError so the wire stays 200.
 """
 
 from __future__ import annotations
 
-import importlib.metadata
 import inspect
 import logging
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
-from typing import Any, Generic, Literal, ParamSpec, TypeVar, get_args
+from typing import Any, ParamSpec, TypeVar, get_args
 
 from pydantic import TypeAdapter, ValidationError
 
 import agentix.trace as trace
-from agentix.idents import MethodName, PackageName
+from agentix.dispatch.bound import _BoundMethod, coerce_args, source_for
+from agentix.dispatch.shape import detect_shape
+from agentix.idents import MethodName
 from agentix.namespace import discover_methods
 from agentix.rpc import is_channel_annotation
-from agentix.runtime.models import (
+from agentix.runtime.shared.models import (
     RemoteError,
     RemoteRequest,
     RemoteResponse,
@@ -37,64 +35,6 @@ logger = logging.getLogger("agentix.dispatch")
 
 P = ParamSpec("P")
 R = TypeVar("R")
-
-Shape = Literal["unary", "stream", "bidi"]
-"""How a method's signature maps onto the wire:
-
-  * `unary`  — plain `T` return; one request, one response
-  * `stream` — `async def f(...) -> AsyncIterator[T]: yield ...`
-  * `bidi`   — same as stream + one `Channel[U]` parameter
-"""
-
-
-def detect_shape(fn: Callable[..., Any], sig: inspect.Signature | None = None) -> Shape:
-    """Derive the wire shape from a function and its signature.
-
-    The runtime check (`inspect.isasyncgenfunction`) is the source of
-    truth — an `async def ... yield` body is a real async generator, and
-    we trust that over annotations alone (which can be wrong: a regular
-    `async def f() -> AsyncIterator[T]: return some_iter` returns a
-    coroutine, not a stream).
-
-    Bidi is detected by a `Channel[T]` parameter in addition to async-gen
-    return. `AsyncIterator[T]` as a parameter no longer marks bidi —
-    `Channel[T]` is now the explicit, type-safe marker.
-
-    The framework's three call shapes are exhaustive; adding a fourth
-    means editing this function and the matching branches in
-    `Dispatcher` / `RuntimeClient`. No plugin extension hook — by design.
-    """
-    if sig is None:
-        sig = inspect.signature(fn, eval_str=True)
-    if not inspect.isasyncgenfunction(fn):
-        return "unary"
-    has_channel = any(
-        is_channel_annotation(p.annotation) for p in sig.parameters.values()
-    )
-    return "bidi" if has_channel else "stream"
-
-
-@dataclass
-class _BoundMethod(Generic[P, R]):
-    name: str
-    stub: Callable[P, R]
-    impl: Callable[..., Any]
-    signature: inspect.Signature
-    shape: Shape
-    param_adapters: dict[str, TypeAdapter[Any]]
-    return_adapter: TypeAdapter[Any]
-    item_adapter: TypeAdapter[Any] | None = None  # output item adapter (stream/bidi only)
-    input_channel_param: str | None = None        # bidi: name of the Channel[T] param
-    input_item_adapter: TypeAdapter[Any] | None = None  # bidi: input item adapter
-
-    @property
-    def is_stream(self) -> bool:
-        """True for stream and bidi — anything that emits a sequence of items."""
-        return self.shape in ("stream", "bidi")
-
-    @property
-    def is_bidi(self) -> bool:
-        return self.shape == "bidi"
 
 
 class Dispatcher:
@@ -190,7 +130,7 @@ class Dispatcher:
 
         Returns `self` for fluent use in entry-point loaders.
         """
-        for name, fn in discover_methods(target):
+        for _name, fn in discover_methods(target):
             self.bind(fn, fn)
         return self
 
@@ -227,13 +167,13 @@ class Dispatcher:
                 ),
             )
         try:
-            args, kwargs = self._coerce(m, request.args, request.kwargs)
+            args, kwargs = coerce_args(m, request.args, request.kwargs)
         except ValidationError as exc:
             return RemoteResponse(
                 ok=False,
                 error=RemoteError(type="ValidationError", message=str(exc)),
             )
-        tokens = trace.set_call_context(request.call_id, _source_for(m.impl))
+        tokens = trace.set_call_context(request.call_id, source_for(m.impl))
         try:
             try:
                 result = m.impl(*args, **kwargs)
@@ -289,11 +229,11 @@ class Dispatcher:
             ).model_dump()}
             return
         try:
-            args, kwargs = self._coerce(m, request.args, request.kwargs)
+            args, kwargs = coerce_args(m, request.args, request.kwargs)
         except ValidationError as exc:
             yield {"type": "error", "error": RemoteError(type="ValidationError", message=str(exc)).model_dump()}
             return
-        tokens = trace.set_call_context(request.call_id, _source_for(m.impl))
+        tokens = trace.set_call_context(request.call_id, source_for(m.impl))
         try:
             try:
                 result = m.impl(*args, **kwargs)
@@ -364,7 +304,7 @@ class Dispatcher:
         except (TypeError, ValidationError) as exc:
             yield {"type": "error", "error": RemoteError(type=type(exc).__name__, message=str(exc)).model_dump()}
             return
-        tokens = trace.set_call_context(request.call_id, _source_for(m.impl))
+        tokens = trace.set_call_context(request.call_id, source_for(m.impl))
         try:
             try:
                 result = m.impl(**coerced)
@@ -393,69 +333,5 @@ class Dispatcher:
             trace.reset_call_context(tokens)
         yield {"type": "end"}
 
-    @staticmethod
-    def _coerce(
-        m: _BoundMethod[Any, Any],
-        args: list[Any],
-        kwargs: dict[str, Any],
-    ) -> tuple[list[Any], dict[str, Any]]:
-        """Bind args/kwargs against the stub signature, coercing each through
-        its parameter's TypeAdapter (pydantic does dataclass/BaseModel/JSON
-        round-tripping). Defaults are filled from the stub.
-        """
-        bound = m.signature.bind(*args, **kwargs)
-        bound.apply_defaults()
-        coerced: dict[str, Any] = {}
-        for pname, raw in bound.arguments.items():
-            adapter = m.param_adapters.get(pname)
-            coerced[pname] = adapter.validate_python(raw) if adapter is not None else raw
-        # Re-split into args / kwargs in original order for the impl call.
-        out_args: list[Any] = []
-        out_kwargs: dict[str, Any] = {}
-        for pname, param in m.signature.parameters.items():
-            if pname not in coerced:
-                continue
-            v = coerced[pname]
-            if param.kind in (
-                inspect.Parameter.POSITIONAL_ONLY,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            ):
-                out_args.append(v)
-            elif param.kind is inspect.Parameter.VAR_POSITIONAL:
-                out_args.extend(v)
-            elif param.kind is inspect.Parameter.VAR_KEYWORD:
-                out_kwargs.update(v)
-            else:  # KEYWORD_ONLY
-                out_kwargs[pname] = v
-        return out_args, out_kwargs
 
-
-def _source_for(impl: Callable[..., Any]) -> PackageName | None:
-    """Derive a namespace package path from an impl function for trace events."""
-    mod = getattr(impl, "__module__", None)
-    if mod is None:
-        return None
-    return PackageName(mod)
-
-
-# The entry-point group every namespace declares under in its pyproject.toml:
-#
-#   [project.entry-points."agentix.namespace"]
-#   bash = "agentix.bash:Bash"
-#
-# The framework reads this at startup via `importlib.metadata.entry_points`.
-NAMESPACE_ENTRY_POINT_GROUP = "agentix.namespace"
-
-
-def discover_entry_points() -> list[Any]:
-    """Return every installed `agentix.namespace` entry point.
-
-    Cheap: walks `importlib.metadata` dist metadata; nothing is imported.
-    The multiplexer uses this in dev/test mode to know which namespaces
-    exist without paying the import cost of every namespace.
-    """
-    eps = importlib.metadata.entry_points()
-    # Python 3.10+: SelectableGroups with .select(); earlier: dict.
-    if hasattr(eps, "select"):
-        return list(eps.select(group=NAMESPACE_ENTRY_POINT_GROUP))
-    return list(eps.get(NAMESPACE_ENTRY_POINT_GROUP, []))  # type: ignore[attr-defined]
+__all__ = ["Dispatcher"]

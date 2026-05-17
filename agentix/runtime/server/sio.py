@@ -41,9 +41,10 @@ import socketio
 from pydantic import ValidationError
 
 from agentix.idents import CallId
-from agentix.runtime import _pump
-from agentix.runtime.codec import pack, unpack
-from agentix.runtime.events import (
+from agentix.runtime.server.multiplexer import NamespaceMultiplexer
+from agentix.runtime.shared import pump as _pump
+from agentix.runtime.shared.codec import pack, unpack
+from agentix.runtime.shared.events import (
     BIDI_END,
     BIDI_END_IN,
     BIDI_ERROR,
@@ -62,8 +63,7 @@ from agentix.runtime.events import (
     TRACES_SUBSCRIBE,
     TRACES_UNSUBSCRIBE,
 )
-from agentix.runtime.models import RemoteError, RemoteRequest
-from agentix.runtime.multiplexer import NamespaceMultiplexer
+from agentix.runtime.shared.models import RemoteError, RemoteRequest
 
 logger = logging.getLogger("agentix.runtime.sio")
 
@@ -81,8 +81,8 @@ def _u(data: Any) -> dict:
 class _CallState:
     """Per-(session, call_id) state for an in-flight stream/bidi call.
 
-    Bidi inbound path is two-tier (mirroring `agentix.runtime.worker`'s
-    pump pattern): `intake` is unbounded so `on_bidi_in` is a sync
+    Bidi inbound path is two-tier (mirroring the worker's pump pattern
+    in `agentix.runtime.server.worker`): `intake` is unbounded so `on_bidi_in` is a sync
     `put_nowait` — no await, no reordering even under `async_handlers=True`.
     A per-call `pump` task drains intake into the bounded `in_queue`
     that the dispatcher's `_input_iter` reads from; the pump's

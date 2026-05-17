@@ -1,10 +1,10 @@
 """Runtime transport wire types.
 
-Lives under `agentix.runtime.models` because every type here is part of the
-HTTP / Socket.IO surface between `RuntimeClient` (orchestrator side) and the
-runtime server (sandbox side). Both client and server import from here;
-sibling subpackages (`runtime/client/`, `runtime/server/`) depend on this
-module but not on each other.
+Lives under `agentix.runtime.shared.models` because every type here is part
+of the HTTP / Socket.IO surface between `RuntimeClient` (orchestrator side)
+and the runtime server (sandbox side). Both client and server import from
+here; sibling subpackages (`runtime/client/`, `runtime/server/`) depend on
+this module but not on each other.
 
 Cross-cutting concepts that aren't wire types — `NamespaceManifest`,
 `SandboxConfig`, `SandboxInfo`, `AGENTIX_CLOSURE_ABI` — stay in

@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from agentix import RuntimeClient
-from agentix.runtime.models import RemoteRequest, TraceEvent
+from agentix.runtime.shared.models import RemoteRequest, TraceEvent
 
 pytestmark = pytest.mark.asyncio
 
@@ -46,7 +46,7 @@ async def test_trace_emit_received_by_subscriber(
 
         collector = asyncio.create_task(_collect())
         await asyncio.sleep(0.2)
-        from agentix.runtime.codec import pack, unpack
+        from agentix.runtime.shared.codec import pack, unpack
         body = pack(RemoteRequest(
             package=Tracer.__module__, method="step",
             kwargs={"label": "hi"}, call_id="rollout-7",
@@ -81,7 +81,7 @@ async def test_trace_filter_by_kind(runtime_module, register_namespace, live_ser
 
         collector = asyncio.create_task(_collect())
         await asyncio.sleep(0.2)
-        from agentix.runtime.codec import pack
+        from agentix.runtime.shared.codec import pack
         body = pack(RemoteRequest(
             package=Tracer.__module__, method="step",
             kwargs={"label": "x"}, call_id="r-1",

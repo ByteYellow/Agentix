@@ -26,7 +26,7 @@ from agentix.models import SandboxConfig, SandboxInfo
 from agentix.rollout import RolloutPool
 from agentix.rpc import Bidi, Channel, RemoteCall, Stream, Unary
 from agentix.runtime.client import RemoteCallError, RuntimeClient
-from agentix.runtime.models import LogRecord, TraceEvent
+from agentix.runtime.shared.models import LogRecord, TraceEvent
 
 __version__ = "0.1.0"
 

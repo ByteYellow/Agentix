@@ -1,4 +1,4 @@
-"""Tests for `agentix._plugin.Registry[T]`.
+"""Tests for `agentix.deployment._plugin.Registry[T]`.
 
 Covers the four scenarios every plugin axis cares about:
 
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentix._plugin import PluginConflictError, Registry
+from agentix.deployment._plugin import PluginConflictError, Registry
 
 
 def _fake_ep(name: str, loader, dist_name: str | None = None,
@@ -44,7 +44,7 @@ def _patch_eps(registry: Registry, eps: list):
 
 
 def _src(name, version):
-    from agentix._plugin import PluginSource
+    from agentix.deployment._plugin import PluginSource
     return PluginSource(dist_name=name, dist_version=version)
 
 

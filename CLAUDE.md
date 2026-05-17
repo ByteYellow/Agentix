@@ -22,6 +22,65 @@ This repo is in active design. **Breaking changes are fine; do not introduce bac
 
 Downstream repos (`Agentix-Agents-Hub`, `Agentix-Datasets`) are updated in lockstep — assume they follow HEAD.
 
+## Systems map
+
+The framework's code is organised around a handful of crisp systems. Each
+one is a single subpackage; nothing important lives anywhere else.
+
+```
+agentix/
+├── idents.py           — branded NewType ids (CallId, PackageName, MethodName, SandboxId)
+├── models.py           — host-side pydantic models (SandboxConfig, NamespaceManifest, …)
+├── namespace.py        — discover_methods: duck-typed walk of a namespace target
+├── rpc.py              — Channel + Unary/Stream/Bidi variants (caller-side wire shapes)
+├── trace.py            — in-process pub/sub for trace events; contextvar-pinned call_id
+├── dispatch/           — server-side dispatch: binding stubs to impls, coercing wire args
+│   ├── shape.py            — detect_shape (unary | stream | bidi)
+│   ├── bound.py            — _BoundMethod + arg coercion helper
+│   ├── dispatcher.py       — the Dispatcher class itself
+│   └── entry_points.py     — `agentix.namespace` entry-point discovery
+├── runtime/            — host↔sandbox transport, split three ways:
+│   ├── shared/             — wire types, codec, framing, event-name constants
+│   │     (codec, models, events, frames, rpc, pump, dump_frame)
+│   ├── client/             — orchestrator-side RuntimeClient (HTTP + Socket.IO)
+│   └── server/             — sandbox-side multiplexer + FastAPI/SIO app + worker
+│         (app, sio, llm_proxy, trace_bridge, multiplexer, worker)
+├── deployment/         — Deployment Protocol + backends (docker / daytona / e2b)
+│   └── _plugin.py          — Registry[T] for the `agentix.deployment` entry-point group
+├── rollout/            — RolloutPool: ephemeral sandbox pool for batched RL rollouts
+└── cli/                — `agentix` command-line: build, deploy, check
+```
+
+One-line per system:
+
+- **idents / models / namespace** — the typed glue everything else imports
+  from. No behaviour, just shared shapes.
+- **rpc** — caller-side variants (`Unary`/`Stream`/`Bidi`) and the
+  `Channel` input helper for bidi. What `RuntimeClient.remote(fn, …)`
+  returns.
+- **trace** — `agentix.trace.emit(...)` from a namespace impl; subscribers
+  receive it. The dispatcher pins `call_id` into a contextvar so emitting
+  code inherits correlation automatically.
+- **dispatch** — server-side. `Dispatcher.bind(stub, impl)` registers a
+  method, `dispatch(...)` / `dispatch_stream(...)` / `dispatch_bidi(...)`
+  route a wire request to its impl. Call-shape detection lives here.
+- **runtime.shared** — every type, constant, and codec on the wire between
+  client and server. Both sides import from here; neither imports from
+  the other.
+- **runtime.client** — `RuntimeClient`: one HTTP connection for unary,
+  one Socket.IO connection multiplexing stream/bidi/logs/trace.
+- **runtime.server** — the bundle image's process (`agentix-server` console
+  script). The `NamespaceMultiplexer` spawns one worker subprocess per
+  namespace (`python -m agentix.runtime.server.worker`) and routes
+  frames; the FastAPI + Socket.IO app is the entry surface.
+- **deployment** — `Deployment` Protocol + backends. The `local` backend
+  is `DockerDeployment`; `daytona` and `e2b` are stubs. Plugin axis #2 is
+  this one (the `_plugin.Registry[T]` here is the registry).
+- **rollout** — `RolloutPool` allocates/recycles sandboxes for RL training
+  loops. Sits on top of `Deployment` + `RuntimeClient`.
+- **cli** — `agentix build / deploy / check`. Hardcoded subcommands; no
+  plugin surface (third-party verbs ship their own `console_scripts`).
+
 ## Architecture (typed Python namespaces, entry-point discovery)
 
 A namespace is a **Python package** (`agentix.<short>`) whose top-level async functions are the remote-callable surface. Caller-side, `c.remote(bash.run, ...)` reads `bash.run.__module__` as the routing key. Server-side, the runtime walks `importlib.metadata.entry_points(group="agentix.namespace")` to discover packages, then **spawns one worker subprocess per namespace** (using each namespace's own venv interpreter) and forwards RPC frames over stdin/stdout — full per-extension dep isolation, no in-process import of namespace code.
@@ -177,7 +236,7 @@ On lifespan startup the multiplexer:
 
 1. Walks `/nix/<short>/lib/python*/site-packages` for `agentix.namespace` entry points (skipping `/nix/runtime`, `/nix/store`, `/nix/.wheels`). Dev/test mode walks the current Python env instead.
 2. For each entry point, records `package → (worker_target, venv_python, bin_dir)` — **no imports, no subprocess yet**.
-3. First `/_remote` for that namespace spawns `<venv_python> -m agentix.runtime.worker --target <module>` with `PATH=<bin_dir>:$PATH`, connects stdin/stdout. The worker binds the package via Dispatcher, sends a `ready` frame, then serves frames until shutdown.
+3. First `/_remote` for that namespace spawns `<venv_python> -m agentix.runtime.server.worker --target <module>` with `PATH=<bin_dir>:$PATH`, connects stdin/stdout. The worker binds the package via Dispatcher, sends a `ready` frame, then serves frames until shutdown.
 4. Subsequent calls reuse the same worker process.
 
 Two dists registering the same entry-point name raise `PluginConflictError` on first lookup. There are **no caller-chosen namespaces**; the Python import path is the identity.

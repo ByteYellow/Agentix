@@ -3,48 +3,93 @@ title: Agentix
 description: The execution, tracing, and integration bridge between agents and your LLM stack.
 ---
 
-**Agentix** is the **execution, tracing, and integration bridge**
-between your agents and your LLM serving, RL post-training, and
-evaluation infrastructure. It hosts agents inside isolated rollout
-containers, captures every LLM call and tool invocation as a
-structured trace, and routes traces to
-[slime](https://github.com/THUDM/slime),
-[verl](https://github.com/volcengine/verl), custom serving providers,
-or benchmark scorers.
+**Agentix is the bridge between agents and the infrastructure around
+them.** It runs agent CLIs and Python frameworks inside isolated
+rollout containers, exposes them as typed Python functions, captures
+LLM and tool activity as structured traces, and routes those traces to
+evaluation harnesses, RL training buffers, observability, or custom
+serving stacks.
 
-Each agent, dataset, or tool is a regular Python project. Call them
-from your trainer or evaluator with typed remote dispatch.
+Use the same bridge for Claude Code, Codex, Aider, mini-swe-agent,
+OpenHands, your own agent, SWE-bench, internal benchmarks, and RL
+post-training. Each agent, dataset, or tool is a normal Python
+package; Agentix handles dispatch across the host-to-container
+boundary.
 
-## Key Features
+<CardGroup cols={2}>
+  <Card title="Run agents" icon="robot" href="/integrate-agent">
+    Wrap a CLI or Python framework as a typed Agentix namespace.
+  </Card>
+  <Card title="Score rollouts" icon="check" href="/integrate-dataset">
+    Keep benchmark scorers separate from agents so both sides stay swappable.
+  </Card>
+  <Card title="Feed RL" icon="diagram-project" href="/extend-runtime">
+    Stream traces through abridge into slime, verl, or your own sink.
+  </Card>
+  <Card title="Deploy anywhere" icon="server" href="/deployment">
+    Start with Docker, then move the same bundle to hosted backends.
+  </Card>
+</CardGroup>
 
-- **Run any agent in an isolated rollout container** with its own
-  dependencies. Built-in recipe:
-  [Claude Code](https://github.com/Agentiix/agentix-cookbook/tree/main/claude-code).
-- **Score against any benchmark.** Built-in:
-  [SWE-bench Verified](https://github.com/Agentiix/agentix-cookbook/tree/main/swebench),
-  wrapping the official
-  [`swebench`](https://github.com/swe-bench/SWE-bench) harness's test
-  specs, log parsers, and grading.
-- **Bridge to RL training and serving.** Every LLM call and tool
-  invocation streams out as a structured trace.
-  [abridge](https://github.com/Agentiix/abridge) consumes that stream,
-  correlates events by rollout, and hands them to framework adapters
-  ([slime](https://github.com/THUDM/slime),
-  [verl](https://github.com/volcengine/verl), custom LLM providers for
-  serving / evaluation).
-- **Pluggable execution backends.** `local` (Docker), `daytona`, and
-  `e2b` built in; Fly, Modal, Kubernetes via
-  `pip install agentix-deployment-<name>`.
-- **Great IDE typing hints.** Container methods autocomplete like
-  local functions; your editor knows the kwargs and return types
-  end-to-end. Three call shapes (unary / streaming / bidirectional)
-  are auto-detected from your function signature.
-- **Observability as a free lunch.** Every integration's
-  `trace.emit(...)` events fan out to OpenTelemetry, Sentry, or your
-  own bus with one `agentix.trace.subscribe(fn)` call — no
-  per-integration wiring.
+## What It Bridges
 
-## Supported Integrations
+| From | Through Agentix | To |
+| --- | --- | --- |
+| Agent CLIs and Python frameworks | Isolated namespace workers and typed remote dispatch | Evaluators, trainers, and orchestration code |
+| Shell, file, and tool operations | Shared rollout container surface | Agents and benchmark harnesses |
+| LLM calls and tool events | Structured trace capture and fan-out | Observability, reward, replay, and dataset pipelines |
+| Rollout traces | [abridge](https://github.com/Agentiix/abridge) correlation and sink protocol | RL buffers such as slime / verl, or custom serving stacks |
+
+## A Rollout Is Just Python
+
+This SWE-bench Verified flow composes three integrations: prepare the
+repo with `bash`, run Claude Code, then score the resulting patch with
+the SWE-bench namespace.
+
+```python
+from datasets import load_dataset
+from agentix import RuntimeClient, bash, claude_code, swebench
+
+inst = dict(load_dataset("princeton-nlp/SWE-bench_Verified", split="test")[0])
+
+async with RuntimeClient(sandbox.runtime_url) as c:
+    await c.remote(
+        bash.run,
+        command=(
+            f"git clone https://github.com/{inst['repo']}.git /testbed && "
+            f"cd /testbed && git checkout {inst['base_commit']}"
+        ),
+    )
+    cc = await c.remote(
+        claude_code.run,
+        instruction=inst["problem_statement"],
+        workdir="/testbed",
+        env={"ANTHROPIC_API_KEY": api_key},
+    )
+    diff = await c.remote(
+        bash.run, command="cd /testbed && git add -A && git diff --cached",
+    )
+    score = await c.remote(swebench.score, instance=inst, patch=diff.stdout)
+```
+
+## Why Teams Use It
+
+- **One bridge, many stacks.** Agents, tools, scorers, deployment
+  backends, and trace sinks plug into the same runtime surface.
+- **Typed dispatch.** `c.remote(fn, ...)` reads the function signature,
+  so kwargs and return types flow into your editor and type checker.
+- **Dependency isolation.** Each namespace runs with its own
+  dependencies inside the rollout container, so incompatible agent
+  stacks can ship together.
+- **Training-ready traces.** Every LLM call and tool invocation can
+  stream into [abridge](https://github.com/Agentiix/abridge), then into
+  framework adapters for [slime](https://github.com/THUDM/slime),
+  [verl](https://github.com/volcengine/verl), or a custom sink.
+- **Composable evaluation.** Agent execution and benchmark scoring are
+  separate namespaces, so you can swap agents, datasets, and backends
+  independently.
+
+## Supported Today
 
 ### Agents
 
@@ -60,26 +105,26 @@ from your trainer or evaluator with typed remote dispatch.
 
 - **SWE-bench Verified** — [recipe](https://github.com/Agentiix/agentix-cookbook/tree/main/swebench),
   built on the official
-  [`swebench`](https://github.com/swe-bench/SWE-bench) package
+  [`swebench`](https://github.com/swe-bench/SWE-bench) package.
 
-### In-tree Primitives
+### Primitives
 
-- **bash** — shell execution inside the rollout container
-- **files** — upload, download, and edit files in the rollout container
+- **bash** — shell execution inside the rollout container.
+- **files** — upload, download, and edit files in the rollout container.
 
 ### Execution Backends
 
-- `local` (Docker), `daytona`, `e2b` — built in
-- Third-party — `pip install agentix-deployment-<name>`
+- `local` (Docker), `daytona`, `e2b` — built in.
+- Third-party backends — `pip install agentix-deployment-<name>`.
 
-## Read next
+## Read Next
 
 <CardGroup cols={2}>
   <Card title="Quick start" icon="rocket" href="/quickstart">
     Install, deploy a rollout container, call an integration.
   </Card>
   <Card title="Cookbook" icon="book" href="https://github.com/Agentiix/agentix-cookbook">
-    Working integrations — Claude Code + SWE-bench scorer.
+    Working integrations for Claude Code and SWE-bench.
   </Card>
   <Card title="Architecture" icon="sitemap" href="/reference/architecture">
     Runtime server, namespace workers, deployment backends.

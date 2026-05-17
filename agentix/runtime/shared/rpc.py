@@ -6,7 +6,7 @@ Each frame on a worker's stdin/stdout is:
   | u32 LE | n bytes msgpack   |
   +--------+-------------------+
 
-The msgpack blob is a dict — see frame schemas below. `agentix.runtime.codec`
+The msgpack blob is a dict — see frame schemas below. `agentix.runtime.shared.codec`
 handles encode/decode, including ext types for ndarray + pydantic models.
 
 Frame schemas (`{"type": "...", ...}` — extra fields per type):
@@ -40,7 +40,7 @@ import asyncio
 import struct
 from typing import Any
 
-from agentix.runtime.codec import pack, unpack
+from agentix.runtime.shared.codec import pack, unpack
 
 
 def pack_frame(payload: dict[str, Any]) -> bytes:

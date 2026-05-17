@@ -4,7 +4,7 @@ Namespace metadata is surfaced via `/namespaces` for introspection — no
 longer shipped as an on-disk file since the runtime discovers namespaces
 via `importlib.metadata` entry points. The top-level sandbox/deployment
 config that orchestrators hand to a `Deployment` lives here too;
-runtime transport / wire types live in `agentix.runtime.models` instead.
+runtime transport / wire types live in `agentix.runtime.shared.models` instead.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 [project]
 name = "agentix"
 version = "0.1.0"
-description = "Typed Python namespaces for sandbox-based agent workflows"
+description = "Execution, tracing, and integration bridge for agent workflows"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

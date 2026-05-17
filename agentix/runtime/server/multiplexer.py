@@ -9,7 +9,7 @@ multiplexer's job is to:
      this walks each `/venvs/<short>/` for entry points; in tests it
      accepts in-process registrations via `register_inprocess(...)`.
   2. **Spawn workers lazily.** First dispatch for a namespace forks
-     `python -m agentix.runtime.worker --target <pkg>:<class>` using
+     `python -m agentix.runtime.server.worker --target <pkg>:<class>` using
      that namespace's venv interpreter, plumbs stdin/stdout for frames.
   3. **Route frames** between transports (POST /_remote, Socket.IO) and
      workers, correlated by `call_id`.
@@ -47,11 +47,11 @@ from typing import Any, Protocol
 from agentix.dispatch import NAMESPACE_ENTRY_POINT_GROUP, Dispatcher
 from agentix.idents import PackageName
 from agentix.models import NamespaceManifest
-from agentix.runtime import frames as F
-from agentix.runtime.models import RemoteError, RemoteRequest, RemoteResponse
-from agentix.runtime.rpc import read_frame, write_frame
+from agentix.runtime.shared import frames as F
+from agentix.runtime.shared.models import RemoteError, RemoteRequest, RemoteResponse
+from agentix.runtime.shared.rpc import read_frame, write_frame
 
-logger = logging.getLogger("agentix.runtime.multiplexer")
+logger = logging.getLogger("agentix.runtime.server.multiplexer")
 
 _WORKER_START_TIMEOUT = 15.0
 
@@ -139,7 +139,7 @@ class _InProcessWorker:
 
 
 class _SubprocessWorker:
-    """Subprocess worker — spawns `python -m agentix.runtime.worker`."""
+    """Subprocess worker — spawns `python -m agentix.runtime.server.worker`."""
 
     def __init__(
         self,
@@ -179,7 +179,7 @@ class _SubprocessWorker:
             existing = env.get("PATH", "/usr/local/bin:/usr/bin:/bin")
             env["PATH"] = f"{self._ns_bin_dir}:{existing}"
         self._proc = await asyncio.create_subprocess_exec(
-            self._python, "-m", "agentix.runtime.worker", "--target", self._target,
+            self._python, "-m", "agentix.runtime.server.worker", "--target", self._target,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=sys.stderr,  # logs straight through to runtime stderr

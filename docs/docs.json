@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
   "name": "Agentix",
-  "description": "Typed Python namespaces for sandbox-based agent workflows.",
+  "description": "The bridge between agents, evaluation, RL training, and LLM serving.",
   "colors": {
     "primary": "#cc785c",
     "light": "#e08a6d",

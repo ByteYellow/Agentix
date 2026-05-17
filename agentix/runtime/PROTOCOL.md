@@ -14,7 +14,7 @@ this file together.
 | ----------------------- | ---------- | ----------------------------------- |
 | `POST /_remote`         | unary      | msgpack body + msgpack response     |
 | `/socket.io/`           | stream + bidi | msgpack-payload events            |
-| `python -m agentix.runtime.worker` stdin/stdout | all three | length-prefixed msgpack frames |
+| `python -m agentix.runtime.server.worker` stdin/stdout | all three | length-prefixed msgpack frames |
 
 The first two are the **host↔sandbox** edge (host = trainer, sandbox =
 runtime container). The third is the **multiplexer↔worker** edge
@@ -175,7 +175,7 @@ Client maps to:
 
 ## Frame type catalog
 
-(See `agentix.runtime.frames` for the constants — these names are the
+(See `agentix.runtime.shared.frames` for the constants — these names are the
 on-wire `type` field values.)
 
 | Direction        | Frame         | Payload fields                                                  |

@@ -2,7 +2,7 @@
 
 # Agentix
 
-**Typed rollouts for agent evaluation, RL data, and serving integrations.**
+**The bridge between agents, evaluation, RL training, and LLM serving.**
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/Agentiix/Agentix)](https://github.com/Agentiix/Agentix)
@@ -15,16 +15,18 @@
 
 ## Overview
 
-**Agentix** is the execution substrate for agent evaluation and RL
-post-training. It gives trainers, evaluators, and agent builders one
+**Agentix** is the **execution, tracing, and integration bridge**
+between agents and your LLM serving, RL post-training, and evaluation
+infrastructure. It gives trainers, evaluators, and agent builders one
 typed Python interface for running agents in isolated rollout
-containers, capturing LLM/tool traces, and scoring outputs against
-benchmark harnesses.
+containers, capturing LLM/tool traces, and routing those traces to
+benchmark scorers, RL buffers, observability sinks, or custom serving
+providers.
 
-Use it when you need to wire Claude Code, Codex, Aider,
-mini-swe-agent, OpenHands, or an in-house agent into SWE-bench,
-custom evals, an LLM proxy, or an RL data buffer without building a
-new runner for every combination.
+Use it when you need to connect Claude Code, Codex, Aider,
+mini-swe-agent, OpenHands, or an in-house agent to SWE-bench,
+custom evals, an LLM proxy, or an RL data buffer without writing a
+bespoke runner for every agent x benchmark x training stack.
 
 Each agent, dataset, or tool is a regular Python package. Call it from
 your trainer or evaluator with typed remote dispatch:
@@ -33,19 +35,28 @@ types across the host-to-container boundary.
 
 ## Why Agentix
 
-- **One rollout surface.** Shell commands, agent CLIs, Python
+- **One bridge, many stacks.** Shell commands, agent CLIs, Python
   frameworks, dataset scorers, and file operations all use the same
   `RuntimeClient.remote(...)` call path.
-- **Isolation without glue sprawl.** Every namespace runs in its own
+- **Isolation without glue sprawl.** Every integration runs in its own
   dependency environment inside the same rollout container, so
   incompatible agent stacks can be bundled together.
-- **Training-ready traces.** LLM calls and tool activity can stream to
+- **Training-ready trace flow.** LLM calls and tool activity can stream to
   [abridge](https://github.com/Agentiix/abridge) (the official
   Agentix extension for RL training), observability sinks, or your own
   collector.
-- **Benchmarks stay composable.** Agent execution and scoring are
+- **Benchmarks stay composable.** Agent execution and scoring remain
   separate namespaces, which makes it easy to swap agents, scorers,
   and deployment backends independently.
+
+## What Agentix Bridges
+
+| From | Agentix layer | To |
+|---|---|---|
+| Agent CLIs and Python frameworks | Isolated namespace workers with typed remote dispatch | Evaluators, trainers, and orchestration code |
+| Tool calls and LLM traffic | Structured trace capture and fan-out | Observability, replay, reward, and dataset pipelines |
+| Rollout traces | [abridge](https://github.com/Agentiix/abridge) correlation and sink protocol | RL buffers such as slime / verl, or custom serving stacks |
+| Local and hosted sandboxes | `agentix.deployment` backends | Docker today; Daytona, E2B, and third-party backends as plugins |
 
 ## Key Features
 
@@ -66,14 +77,13 @@ types across the host-to-container boundary.
 - **Pluggable execution backends.** `local` (Docker), `daytona`, and
   `e2b` built in; Fly, Modal, Kubernetes via
   `pip install agentix-deployment-<name>`.
-- **Great IDE typing hints.** Container methods autocomplete like
-  local functions; your editor knows the kwargs and return types
-  end-to-end. Three call shapes (unary / streaming / bidirectional)
-  are auto-detected from your function signature.
-- **Observability as a free lunch.** Every integration's
-  `trace.emit(...)` events fan out to OpenTelemetry, Sentry, or your
-  own bus with one `agentix.trace.subscribe(fn)` call — no
-  per-integration wiring.
+- **Typed dispatch across the bridge.** Container methods autocomplete
+  like local functions; your editor knows the kwargs and return types.
+  Three call shapes (unary / streaming / bidirectional) are
+  auto-detected from your function signature.
+- **Trace fan-out and observability.** Every integration's
+  `trace.emit(...)` events can ship to OpenTelemetry, Sentry, or your
+  own bus with one `agentix.trace.subscribe(fn)` call.
 
 ## Supported Integrations
 
@@ -107,6 +117,15 @@ types across the host-to-container boundary.
 - `daytona` — built-in
 - `e2b` — built-in
 - Third-party — `pip install agentix-deployment-<name>`
+
+### RL Frameworks / Serving Providers
+
+- **abridge** — Agentix's host-side rollout bridge; correlates runtime
+  trace events into per-rollout records and pushes them to sinks.
+- **slime / verl** — RL post-training adapters can consume abridge
+  rollouts and append them to framework-specific buffers.
+- **Custom serving or evaluation stacks** — implement `abridge.Sink`
+  or subscribe directly with `agentix.trace.subscribe(fn)`.
 
 ## Architecture
 

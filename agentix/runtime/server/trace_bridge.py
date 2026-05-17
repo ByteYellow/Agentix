@@ -24,9 +24,9 @@ import socketio
 
 import agentix.trace as trace
 from agentix.idents import CallId, PackageName
-from agentix.runtime.codec import pack
-from agentix.runtime.events import TRACE, TRACES_ROOM
-from agentix.runtime.models import TraceEvent
+from agentix.runtime.shared.codec import pack
+from agentix.runtime.shared.events import TRACE, TRACES_ROOM
+from agentix.runtime.shared.models import TraceEvent
 
 
 def install_trace_bridge(sio: socketio.AsyncServer):

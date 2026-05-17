@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agentix.models import NamespaceManifest, SandboxConfig
-from agentix.runtime.models import RemoteError, RemoteRequest, RemoteResponse
+from agentix.runtime.shared.models import RemoteError, RemoteRequest, RemoteResponse
 
 
 def test_namespace_manifest_minimal():

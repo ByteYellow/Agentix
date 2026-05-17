@@ -1,9 +1,14 @@
-"""Generic plugin registry — one tool, all extension axes.
+"""Plugin registry for the `agentix.deployment` entry-point group.
 
-Every framework axis (`Deployment`, trace sinks, spec resolvers, CLI
-subcommands, wire patterns, the namespace surface itself) is a thin
-wrapper around `Registry[T]`. The registry knows two ways to find
-plugins:
+Lives under `agentix.deployment` because deployments are the only
+host-side axis the framework discovers via entry points — the project's
+rule is that only sandbox-lifecycle axes (`agentix.namespace` for
+sandbox-side, `agentix.deployment` for host-side) get plugin discovery;
+everything else is plain Python composition. The namespace axis has its
+own bespoke walker in `agentix.dispatch.entry_points`; this generic
+`Registry[T]` powers `Deployment.load(name)`.
+
+Two ways to find plugins:
 
   * **Production:** `importlib.metadata.entry_points(group=...)` — what
     `pip install some-plugin` populates. The dist's `pyproject.toml`
@@ -16,16 +21,6 @@ plugins:
 Lookup is lazy — entry points are walked on the first `get()` /
 `all()` call. Loaders that raise are caught and remembered per-entry
 (`errors()`), so one broken plugin doesn't poison the rest.
-
-How each axis *uses* a Registry depends on its semantic shape:
-
-  * **select-one** (Deployment): `registry.get(name)`
-  * **fan-out** (trace sinks): `registry.all().values()`
-  * **chain-of-responsibility** (spec resolvers): sorted by `priority`
-  * **merge-namespace** (CLI subcommands): `registry.all().items()`
-
-The registry just gives you the `name → T` mapping; the consumer
-decides the semantics.
 """
 
 from __future__ import annotations
@@ -36,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-logger = logging.getLogger("agentix.plugin")
+logger = logging.getLogger("agentix.deployment.plugin")
 
 T = TypeVar("T")
 

@@ -15,7 +15,7 @@ Endpoints:
 Discovery walks `importlib.metadata.entry_points(group="agentix.namespace")`
 in the runtime's own venv; in a bundle image, each namespace's venv has
 been pip-installed alongside the runtime so this finds them all. Worker
-spawning is lazy — `python -m agentix.runtime.worker --target ...` runs
+spawning is lazy — `python -m agentix.runtime.server.worker --target ...` runs
 on the first `/_remote` call for that namespace.
 """
 
@@ -28,16 +28,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Response
 
 from agentix import __version__
-from agentix.runtime.codec import pack, unpack
-from agentix.runtime.models import (
+from agentix.runtime.server.llm_proxy import router as llm_proxy_router
+from agentix.runtime.server.multiplexer import NamespaceMultiplexer
+from agentix.runtime.server.sio import make_sio
+from agentix.runtime.server.trace_bridge import install_trace_bridge
+from agentix.runtime.shared.codec import pack, unpack
+from agentix.runtime.shared.models import (
     HealthResponse,
     NamespaceInfo,
     RemoteRequest,
 )
-from agentix.runtime.multiplexer import NamespaceMultiplexer
-from agentix.runtime.server.llm_proxy import router as llm_proxy_router
-from agentix.runtime.server.sio import make_sio
-from agentix.runtime.server.trace_bridge import install_trace_bridge
 
 logger = logging.getLogger("agentix.runtime")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
