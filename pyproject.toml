@@ -61,10 +61,9 @@ target-version = "py311"
 select = ["E", "F", "I", "W", "UP"]
 
 [tool.pyright]
-# Strict mode is the goal; raise this gradually as the codebase converges
-# on the new Namespace/WirePattern shape. Today's basic mode catches the
-# obvious mistakes without drowning in advisory diagnostics.
-include = ["agentix", "primitives"]
+# Strict mode is the goal; raise this gradually. Today's basic mode
+# catches the obvious mistakes without drowning in advisory diagnostics.
+include = ["agentix"]
 exclude = ["**/__pycache__", ".venv"]
 typeCheckingMode = "basic"
 pythonVersion = "3.11"

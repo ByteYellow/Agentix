@@ -1,22 +1,54 @@
 # Roadmap
 
-## v0.1.0 — Closure runtime (current)
+## v0.1.0 — RPC + bundle (current)
 
-Run any Nix closure inside a Docker sandbox as a typed Python module imported in-process by the runtime. Compose multiple closures, dispatch typed calls via `RuntimeClient.remote(fn, ...)`.
+Two concepts, no more:
 
-- [x] Closure ABI: `VOLUME /nix` + `/nix/store` + `/nix/entry/python/<package>` + `/nix/entry/manifest.json`
-- [x] `DockerDeployment` — per-image named volume keyed by image digest, auto-populated by Docker; per-closure `-v /mnt/c<digest>:ro` + tmpfs `/nix`; sandbox entrypoint builds the `/nix/store` symlink forest and execs the runtime
-- [x] Runtime server — built-in `exec / upload / download`, `/closures`, single typed-dispatch endpoint `POST /_remote`
-- [x] Auto-load on startup: runtime scans `/mnt`, imports each closure's package, calls `<pkg>._register.register()` -> `Dispatcher`
-- [x] Streaming returns via `AsyncIterator[T]` on stubs; wire is NDJSON on the same `/_remote` endpoint
-- [x] Unit tests in CI
+- **RPC.** `c.remote(fn, ...)` dispatches any importable Python module
+  to a sandboxed worker subprocess. `unary`, server-`stream`, and
+  `bidi` shapes are detected from the function signature; the wire
+  flows over HTTP for unary and Socket.IO for the rest.
+- **Bundle.** `agentix build [path]` packages one project root + its
+  declared deps into a deploy-ready Docker image. Plugins arrive
+  transitively via pip; the runtime auto-registers any importable
+  module on first dispatch.
 
-Higher-level concepts (agent adapter, dataset runner, benchmark orchestration) are **explicitly out of scope for v0.1.0** and will be revisited once the closure substrate is stable.
+What's shipped:
+
+- [x] Dispatcher + worker subprocess (`agentix.dispatch`,
+      `agentix.runtime.server.worker`).
+- [x] HTTP + Socket.IO transport (`agentix.runtime.shared.codec` /
+      `events` / `rpc`).
+- [x] Trace pub/sub (`agentix.trace`) — namespace impls `trace.emit(...)`,
+      subscribers get one-shot fan-out.
+- [x] `DockerDeployment` (lives in `agentix-deployment-docker`).
+- [x] `RolloutPool` — warm sandbox pool for batched RL rollouts.
+- [x] Single-spec `agentix build` — one project root, plugins via pip.
+- [x] On-demand auto-register — user projects don't need entry points.
+
+Sibling repos (each independently releasable):
+
+- [`Agentix-Runtime-Basic`](https://github.com/Agentiix/Agentix-Runtime-Basic)
+  — `bash` + `files` namespaces. On PyPI as `agentix-runtime-basic`.
+- [`Agentix-Deployment-Docker`](https://github.com/Agentiix/Agentix-Deployment-Docker)
+  — local Docker backend. On PyPI as `agentix-deployment-docker`.
+- [`Agentix-Deployment-Daytona`](https://github.com/Agentiix/Agentix-Deployment-Daytona),
+  [`Agentix-Deployment-E2B`](https://github.com/Agentiix/Agentix-Deployment-E2B)
+  — stub backends; CLI surface in place, lifecycle wiring pending.
+- [`abridge`](https://github.com/Agentiix/abridge) — host-side
+  rollout-to-RL-buffer bridge.
 
 ## Unscheduled
 
-Future directions, listed so the closure layer is built with them in mind.
+Future directions, listed so the framework is built with them in mind.
 
-- **LLM proxy** — transparent proxy that intercepts API calls from closures for token-level trajectory capture, cost tracking, replay.
-- **Checkpoint / partial rollout** — snapshot a sandbox (filesystem + loaded closure state), fork to explore alternative continuations; enables tree search / RL over execution traces.
-- **K8s deployment backend** — parallel `Deployment` implementation using the same closure image contract.
+- **LLM proxy** — transparent proxy that intercepts API calls from
+  namespaces for token-level trajectory capture, cost tracking, replay.
+  The proxy route (`/_llm/<provider>/<path>`) already exists; the
+  upstream wiring + the trace correlation are TBD.
+- **Checkpoint / partial rollout** — snapshot a sandbox (filesystem +
+  loaded namespace state), fork to explore alternative continuations.
+  Enables tree search / RL over execution traces.
+- **K8s deployment backend** — parallel `Deployment` implementation
+  using the same bundle-image contract; would ship as
+  `agentix-deployment-k8s`.
