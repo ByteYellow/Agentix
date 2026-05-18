@@ -21,12 +21,8 @@ jobs:
           cache: pip
       - run: pip install -e '.[dev]'
       - name: lint
-        run: ruff check agentix/ tests/ primitives/
+        run: ruff check agentix/ tests/
+      - name: types
+        run: pyright agentix
       - name: unit tests
         run: pytest tests/ -v
-
-  # The end-to-end Docker job was retired alongside `tests/smoke_docker.py`
-  # (which used the pre-typed-dispatch reverse-proxy API). The unit job's
-  # `live_server` fixture already exercises a real uvicorn + Socket.IO
-  # round trip; a Docker-level e2e harness gets re-added once we have a
-  # closure that genuinely depends on the Docker deployment path.
