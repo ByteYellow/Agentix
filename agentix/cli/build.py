@@ -180,8 +180,8 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
         raise SystemExit(proc.returncode)
 
 
-def _build(stage: Path) -> Path:
-    """Run `nix build` and `docker load`; return the loaded image tag."""
+def _build(stage: Path) -> str:
+    """Run `nix build` and `docker load`; return the loaded image ref."""
     _run(
         ["nix", "build", ".#bundle", "-o", "result", "--print-build-logs"],
         cwd=stage,
@@ -205,11 +205,33 @@ def _build(stage: Path) -> Path:
     if proc.returncode != 0:
         raise SystemExit(proc.returncode)
 
-    # Parse "Loaded image: <tag>" from docker load output.
+    # Parse "Loaded image: <ref>" from docker load output.
     for line in proc.stdout.splitlines():
         if line.startswith("Loaded image:"):
-            return Path(line.split(":", 1)[1].strip())
+            return line.split(":", 1)[1].strip()
     raise SystemExit("docker load did not print 'Loaded image:'")
+
+
+def _tag_latest(loaded: str) -> str | None:
+    """Also tag the loaded image as `<name>:latest` for convenience.
+
+    Returns the alias ref on success, or None when the loaded ref isn't
+    `<name>:<version>` shape (e.g. user already passed `:latest`).
+    """
+    if ":" not in loaded:
+        return None
+    name, _, tag = loaded.rpartition(":")
+    if not name or tag == "latest":
+        return None
+    alias = f"{name}:latest"
+    proc = subprocess.run(
+        ["docker", "tag", loaded, alias],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        return None
+    return alias
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -280,7 +302,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         stage = Path(tmp)
         _stage(stage)
         loaded = _build(stage)
+        alias = _tag_latest(loaded)
         print(f"\nimage ready → {loaded}", file=sys.stderr)
+        if alias:
+            print(f"            → {alias}", file=sys.stderr)
         # Stage path is destroyed on exit; nothing else to do.
         return 0
 

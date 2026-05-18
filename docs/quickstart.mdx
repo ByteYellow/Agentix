@@ -1,69 +1,68 @@
 ---
 title: Quickstart
-description: Build a tiny Python bundle, deploy it in Docker, and call it with RuntimeClient.remote.
+description: Build a runtime bundle, overlay it on any Linux task image, and call a remote function with RuntimeClient.remote.
 ---
 
-This quickstart builds the smallest useful Agentix flow:
+This quickstart walks the shortest end-to-end Agentix flow:
 
-1. Create a normal Python package with one async function.
-2. Build it into a sandbox image with `agentix build`.
-3. Start a local Docker sandbox.
-4. Call the function from host-side Python with `RuntimeClient.remote`.
+1. Declare deps in a normal Python project.
+2. `agentix build` packages the project + every transitive dep into a
+   self-contained runtime image — no `FROM`, no `pip install` at run
+   time, just a Nix closure under `/nix/store/...`.
+3. Deploy a sandbox: the runtime image is overlaid onto a task base
+   image with `--volumes-from`. Different task images, same runtime.
+4. Call a remote function with `RuntimeClient.remote(fn, …)`.
 
 ## Prerequisites
 
 - Python 3.11 or newer
-- Docker
-- An Agentix runtime base image such as `agentix/runtime:0.1.0` available
-  locally or in your registry
+- Docker (Engine 20.10+; 25.0+ recommended once `--mount type=image`
+  stabilizes)
+- [Nix](https://nixos.org/download/) on the build host (the framework
+  vendors a pinned Nixpkgs revision)
+- `uv` for dependency locking (`uv.lock` is mandatory — `uv2nix` reads
+  it to build the Python closure)
 
-## Install
+## One project, two images
 
-Install the host-side framework and the Docker deployment backend:
+The two-image model is the heart of Agentix:
 
-<Tabs>
-  <Tab title="pip">
-    ```bash
-    pip install agentixx agentix-deployment-docker
-    ```
-  </Tab>
-  <Tab title="uv">
-    ```bash
-    uv add agentixx agentix-deployment-docker
-    ```
-  </Tab>
-  <Tab title="From source">
-    ```bash
-    git clone https://github.com/Agentiix/Agentix
-    cd Agentix
-    pip install -e '.[dev]'
-    pip install -e ../Agentix-Deployment-Docker
-    ```
-  </Tab>
-</Tabs>
+- **`runtime_image`** — the bundle from `agentix build`. Generic and
+  reusable. Holds Python, agentixx, every plugin, your code, all
+  transitive deps under `/nix/store/...` with libc vendored.
+- **`image`** — the task-specific base the workload runs in (a
+  SWE-bench task image, a customer environment, plain Ubuntu, …).
 
-If your remote function imports sandbox primitives such as `agentix.bash`,
-also install and declare `agentix-runtime-basic`.
+`DockerDeployment` mounts the runtime's `/nix` into the task container
+at sandbox-create time. The Python interpreter, agentix-server, your
+code, and the plugin binaries (bash, coreutils, …) all live under
+`/nix/runtime/bin/` and resolve regardless of the task image's
+distribution.
 
-## Create a Remote Target
+## Layout
 
-Create a package that exposes one function. There is no base class,
-registration hook, or framework marker.
+```text
+hello-agentix/
+├── pyproject.toml
+├── uv.lock                       # run `uv lock`
+├── run.py                        # host orchestrator
+└── src/
+    └── hello_agentix/
+        └── __init__.py           # sandbox-side module (placeholder here)
+```
 
 <Tabs>
-  <Tab title="src/hello_agentix/__init__.py">
-    ```python
-    async def run(input: str) -> str:
-        return f"sandbox saw: {input}"
-    ```
-  </Tab>
   <Tab title="pyproject.toml">
     ```toml
     [project]
     name = "hello-agentix"
     version = "0.1.0"
     requires-python = ">=3.11"
-    dependencies = ["agentixx>=0.1.0"]
+    dependencies = [
+        "agentixx>=0.1.5",
+        "agentix-runtime-basic>=0.1.4",      # bash + files namespaces
+        "agentix-deployment-docker>=0.1.4",  # local-docker backend
+    ]
 
     [build-system]
     requires = ["hatchling"]
@@ -73,84 +72,130 @@ registration hook, or framework marker.
     packages = ["src/hello_agentix"]
     ```
   </Tab>
-  <Tab title="Layout">
-    ```text
-    hello-agentix/
-    ├── pyproject.toml
-    └── src/
-        └── hello_agentix/
-            └── __init__.py
+  <Tab title="src/hello_agentix/__init__.py">
+    ```python
+    # Pure placeholder for this quickstart — bash.run from
+    # agentix-runtime-basic does all the work.
+    #
+    # Add your own functions when you outgrow bash:
+    #
+    #     async def greet(name: str) -> str:
+    #         return f"hello {name} from inside the sandbox"
     ```
+  </Tab>
+  <Tab title="uv.lock">
+    Run once and commit:
+
+    ```bash
+    uv lock
+    ```
+
+    `agentix build` refuses to run without it — `uv2nix` reads the
+    lock to construct a deterministic Python closure.
   </Tab>
 </Tabs>
 
-Install the package locally too. The caller imports the same function
-object it will ask the sandbox to run.
+## Install + build
 
 ```bash
-pip install -e ./hello-agentix
+cd hello-agentix
+uv sync
+uv run agentix build . --name hello-agentix
+# → docker images now has hello-agentix:0.1.0 and hello-agentix:latest
 ```
 
-## Build the Bundle
+`agentix build` does, in order:
 
-`agentix build` installs the project and its dependencies into one image.
+1. Stages your project + every plugin's `default.nix` (each plugin
+   ships its system deps next to its Python module).
+2. Runs `nix build` against the vendored Nixpkgs pin: `uv2nix`
+   produces a derivation for every entry in `uv.lock`,
+   `symlinkJoin` merges them with the plugin trees.
+3. Streams the resulting `dockerTools.streamLayeredImage` tarball
+   into `docker load` and also applies a `:latest` alias for
+   convenience.
 
-```bash
-agentix build ./hello-agentix -o hello-agentix:0.1.0
-```
+The bundle declares `VOLUME /nix` so the deployment can share it via
+`--volumes-from` (see below). No base image, no `FROM` directive, no
+runtime `pip install`.
 
-If your project has a `default.nix`, Agentix adds a Nix builder stage and
-links the derivation's binaries into the final image under
-`/nix/runtime/bin`.
+## Call it
 
-## Call It
-
-Deploy the image with the Docker backend, then call the remote function.
-
-```python title="call_hello.py"
+```python title="run.py"
 import asyncio
 
-from agentix import RuntimeClient
-from agentix.deployment.base import SandboxConfig, session
+from agentix import RuntimeClient, SandboxConfig, session
+from agentix.bash import run
 from agentix.deployment.docker import DockerDeployment
-from hello_agentix import run
 
 
 async def main() -> None:
     deployment = DockerDeployment()
-    config = SandboxConfig(image="hello-agentix:0.1.0")
-
+    config = SandboxConfig(
+        # Task base image — workload environment.
+        image="python:3.13-slim",
+        # Runtime overlay from `agentix build`.
+        runtime_image="hello-agentix:0.1.0",
+    )
     async with session(deployment, config) as sandbox:
+        print(f"sandbox up at {sandbox.runtime_url}")
         async with RuntimeClient(sandbox.runtime_url) as client:
-            result = await client.remote(run, input="hello")
-            print(result)
+            result = await client.remote(run, command="echo hello from $(uname -a)")
+            print(f"exit={result.exit_code} stdout={result.stdout!r}")
 
 
 asyncio.run(main())
 ```
 
 ```bash
-python call_hello.py
-# sandbox saw: hello
+uv run python run.py
 ```
 
-The client sends the target `hello_agentix::run` to the runtime worker.
-The worker imports `hello_agentix`, validates the kwargs against
-`run`'s signature, calls it, and returns the decoded `str`.
+Expected output:
+
+```text
+sandbox up at http://localhost:33803
+exit=0 stdout='hello from Linux <kernel> ... GNU/Linux\n'
+```
+
+## How the overlay works
+
+Under the hood, `DockerDeployment.create` does:
+
+```bash
+# Once per distinct runtime_image — stopped container holds its /nix.
+docker create --name agentix-runtime-<hash> hello-agentix:0.1.0
+
+# Per sandbox — task image plus the runtime's /nix as a shared volume.
+docker run -d --name <sid> --network host \
+    -e AGENTIX_BIND_PORT=<port> \
+    --volumes-from agentix-runtime-<hash>:ro \
+    --entrypoint /nix/runtime/bin/agentix-server \
+    python:3.13-slim
+```
+
+The task container sees `/nix/store/...` and `/nix/runtime/bin/...` at
+their canonical paths. Python's RPATH (baked at Nix build time) finds
+its libs under `/nix/store/...` because that's exactly where the
+mounted volume puts them.
+
+(`--mount type=image,subpath=nix` will let us skip the carrier when
+that combination lands in stable Docker — both paths use the same
+entrypoint, so the swap is transparent.)
 
 ## Next
 
 <CardGroup cols={2}>
-  <Card title="Integrate an Agent" icon="robot" href="/integrate-agent">
-    Wrap an agent CLI as a typed Python function.
+  <Card title="Cookbook: hello-agentix" icon="book" href="https://github.com/Agentiix/agentix-cookbook/tree/main/examples/hello-agentix">
+    The complete project files used here.
   </Card>
-  <Card title="Integrate a Dataset" icon="check" href="/integrate-dataset">
-    Expose a benchmark scorer as one narrow remote call.
+  <Card title="Cookbook: eval-cc-swe" icon="flask" href="https://github.com/Agentiix/agentix-cookbook/tree/main/examples/eval-cc-swe">
+    Larger example: Claude Code on SWE-bench Verified.
   </Card>
   <Card title="Architecture" icon="sitemap" href="/reference/architecture">
-    See how bundles, workers, and transports fit together.
+    Bundles, workers, and transports.
   </Card>
   <Card title="CLI Reference" icon="terminal" href="/reference/cli">
-    Review every `agentix build` option.
+    Every `agentix build` option.
   </Card>
 </CardGroup>
