@@ -22,7 +22,7 @@ from agentix.deployment.base import (
 )
 from agentix.runtime.client import RemoteCallError, RuntimeClient
 from agentix.runtime.client._sio_facade import AsyncClientNamespace
-from agentix.sio import Namespace, register_namespace
+from agentix.sio import Namespace, RemoteSioError, register_namespace
 
 __version__ = "0.2.1"
 
@@ -31,6 +31,7 @@ __all__ = [
     "Deployment",
     "Namespace",
     "RemoteCallError",
+    "RemoteSioError",
     "RuntimeClient",
     "Sandbox",
     "SandboxConfig",
