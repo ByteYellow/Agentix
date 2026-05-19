@@ -6,7 +6,13 @@
   outputs = { self, agentix }:
     let
       system = "@SYSTEM@";
-      pkgs = agentix.inputs.nixpkgs.legacyPackages.${system};
+      # Re-import nixpkgs with `config.allowUnfree = true` so plugin
+      # `default.nix` files can pull unfree binaries (e.g. claude CLI).
+      # Plugins that don't need unfree packages are unaffected.
+      pkgs = import agentix.inputs.nixpkgs {
+        inherit system;
+        config.allowUnfree = true;
+      };
     in {
       packages.${system}.bundle = agentix.lib.mkBundle {
         inherit pkgs;

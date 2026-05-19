@@ -87,13 +87,23 @@ def _stage_builder(dest: Path) -> None:
         (dest / fname).write_bytes(src.read_bytes())
 
 
-def _discover_plugin_nix(stage_plugin_dir: Path) -> list[str]:
-    """Find every `agentix.<short>/default.nix` shipped by installed wheels.
+def _discover_plugin_nix(stage_plugin_dir: Path, project_src: Path) -> list[str]:
+    """Find every `default.nix` that contributes system binaries to the bundle.
 
-    Returns the list of nix-relative paths (one per plugin) ready to drop
-    into the generated wrapper flake. Each plugin's default.nix is copied
-    into `stage_plugin_dir/<short>.nix` so the flake context is self-
-    contained — Nix won't follow absolute paths outside the flake root.
+    Two sources, in order:
+
+    1. Plugin wheels installed under the `agentix` namespace
+       (`agentix.<short>/default.nix`). These ship via `pip install
+       agentix-<plugin>` and are how runtime extensions add their CLI
+       deps (e.g. `agentix-runtime-basic` adds `bash`).
+    2. The **user project root**'s own `default.nix`, if present —
+       lets a project pull in extra binaries (`claude`, `ffmpeg`, ...)
+       without packaging a fake plugin.
+
+    Each discovered file is copied into `stage_plugin_dir/<name>.nix`
+    so the flake context is self-contained; Nix won't follow absolute
+    paths outside the flake root. Returns the list of nix-relative
+    paths ready to drop into the generated wrapper flake.
     """
     stage_plugin_dir.mkdir(parents=True)
     nix_paths: list[str] = []
@@ -101,18 +111,27 @@ def _discover_plugin_nix(stage_plugin_dir: Path) -> list[str]:
     try:
         agentix_root = resources.files("agentix")
     except (ModuleNotFoundError, FileNotFoundError):
-        return nix_paths
+        agentix_root = None
 
-    for entry in agentix_root.iterdir():
-        if not entry.is_dir():
-            continue
-        nix_file = entry / "default.nix"
-        if not nix_file.is_file():
-            continue
-        short = entry.name
-        target = stage_plugin_dir / f"{short}.nix"
-        target.write_bytes(nix_file.read_bytes())
-        nix_paths.append(f"./plugins/{short}.nix")
+    if agentix_root is not None:
+        for entry in agentix_root.iterdir():
+            if not entry.is_dir():
+                continue
+            nix_file = entry / "default.nix"
+            if not nix_file.is_file():
+                continue
+            short = entry.name
+            target = stage_plugin_dir / f"{short}.nix"
+            target.write_bytes(nix_file.read_bytes())
+            nix_paths.append(f"./plugins/{short}.nix")
+
+    # Project root default.nix, when present.
+    project_nix = project_src / "default.nix"
+    if project_nix.is_file():
+        target = stage_plugin_dir / "project.nix"
+        target.write_bytes(project_nix.read_bytes())
+        nix_paths.append("./plugins/project.nix")
+
     return nix_paths
 
 
@@ -274,7 +293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     def _stage(stage: Path) -> None:
         _stage_builder(stage / "_builder")
         _stage_project(src, stage / "project")
-        plugin_paths = _discover_plugin_nix(stage / "plugins")
+        plugin_paths = _discover_plugin_nix(stage / "plugins", src)
         wrapper = _render_wrapper(
             name=name,
             tag=tag,
