@@ -301,13 +301,20 @@ narrowest comment (`# type: ignore[specific-rule]`) and noting why.
 
 ## Development Distribution
 
-The core, the plugins, and the examples are all members of one uv
-workspace (see Monorepo Layout). `uv sync` at the repo root installs
-every member editable into one venv:
+The core and the plugins are members of one uv workspace (see Monorepo
+Layout). Install every member editable into one venv:
 
 ```
-uv sync --all-extras      # once; sets up .venv with everything live
+uv sync --all-packages --all-extras
 ```
+
+`--all-packages` is required — without it `uv sync` installs only the
+root (`agentixx`) and its deps, not the plugin members.
+
+The repo sits on a slow FUSE mount, so the venv is created on local
+disk and symlinked: `UV_PROJECT_ENVIRONMENT=/root/agentix-venv uv sync
+… && ln -s /root/agentix-venv .venv`. A venv built directly on the
+FUSE path is pathologically slow and occasionally corrupts.
 
 Day-to-day there is **no commit → push → publish cycle** — editing a
 file in `agentix/`, `plugins/abridge/`, or `examples/` is immediately
