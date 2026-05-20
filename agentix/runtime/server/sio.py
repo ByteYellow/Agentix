@@ -27,6 +27,7 @@ import socketio
 from pydantic import ValidationError
 
 from agentix.runtime.server.worker import RuntimeWorkerClient
+from agentix.runtime.shared import MAX_MESSAGE_BYTES
 from agentix.runtime.shared.callables import RemoteCallable
 from agentix.runtime.shared.codec import pack, unpack
 from agentix.runtime.shared.idents import CallId
@@ -76,12 +77,17 @@ def make_sio(
     # timeout keeps the connection alive across those blips — a dropped
     # connection orphans the in-flight call. Genuinely dead peers are
     # still reaped, just after 5 idle minutes instead of 20s.
+    #
+    # `max_http_buffer_size`: the default 1 MB cap kills the websocket
+    # the moment a `c.remote` payload or plugin event exceeds it — see
+    # `MAX_MESSAGE_BYTES`.
     sio = socketio.AsyncServer(
         async_mode="asgi",
         cors_allowed_origins="*",
         namespaces="*",
         ping_interval=25,
         ping_timeout=300,
+        max_http_buffer_size=MAX_MESSAGE_BYTES,
     )
     sessions: dict[str, _SessionState] = {}
     opened_namespaces: set[str] = set()  # paths the worker has opened

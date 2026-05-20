@@ -29,6 +29,7 @@ from typing import Any
 import httpx
 import socketio
 
+from agentix.runtime.shared import MAX_MESSAGE_BYTES
 from agentix.runtime.shared.callables import RemoteCallable, display_name_for
 from agentix.runtime.shared.codec import pack, unpack
 from agentix.runtime.shared.models import HealthResponse, RemoteError
@@ -167,7 +168,13 @@ class RuntimeClient:
         async with self._sio_lock:
             if self._sio is not None and self._sio.connected:
                 return self._sio
-            sio = socketio.AsyncClient()
+            # `max_msg_size` lifts the websocket's receive cap (engineio's
+            # client rides aiohttp, default 4 MB) — large `c.remote`
+            # payloads / plugin events otherwise kill the connection.
+            # Matches the server's `max_http_buffer_size`.
+            sio = socketio.AsyncClient(
+                websocket_extra_options={"max_msg_size": MAX_MESSAGE_BYTES},
+            )
 
             async def _on_call_result(data):
                 await self._route_event("result", data)

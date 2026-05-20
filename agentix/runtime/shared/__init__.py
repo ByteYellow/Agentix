@@ -18,5 +18,21 @@ Submodules in this package:
   - `frames`   — stdio frame `type` / `kind` tag constants
   - `framing`  — length-prefixed msgpack framing for worker stdio
   - `models`   — pydantic wire types (RemoteRequest, RemoteResponse, …)
-  - `pump`     — per-bidi-call queue plumbing (used by both worker + SIO)
 """
+
+from __future__ import annotations
+
+# Maximum size of a single Socket.IO message (one `c.remote` payload or
+# one plugin-namespace event). The default Engine.IO / `websockets`
+# cap is 1 MB — far too small: a `c.remote` carrying a pickled object
+# graph, or an `abridge` event carrying an LLM request body (system
+# prompt + dozens of tool schemas + a growing conversation), routinely
+# exceeds it, and the websocket is then killed mid-call. 256 MiB is a
+# generous ceiling that still bounds a runaway payload.
+#
+# Applied in three places that must agree: the Socket.IO server
+# (`max_http_buffer_size`), the Socket.IO client (`websocket_extra_
+# options.max_size`), and uvicorn's websocket impl (`ws_max_size`).
+MAX_MESSAGE_BYTES = 256 * 1024 * 1024
+
+__all__ = ["MAX_MESSAGE_BYTES"]

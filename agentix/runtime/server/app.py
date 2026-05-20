@@ -104,7 +104,17 @@ def main() -> None:
             print("Waiting for debugger to attach...")
             debugpy.wait_for_client()
 
-    uvicorn.run("agentix.runtime.server:app", host=args.host, port=args.port)
+    # `ws_max_size` lifts uvicorn's websocket frame cap to match the
+    # Socket.IO layer's `max_http_buffer_size` — otherwise uvicorn would
+    # be the bottleneck for a large `c.remote` payload / plugin event.
+    from agentix.runtime.shared import MAX_MESSAGE_BYTES
+
+    uvicorn.run(
+        "agentix.runtime.server:app",
+        host=args.host,
+        port=args.port,
+        ws_max_size=MAX_MESSAGE_BYTES,
+    )
 
 
 if __name__ == "__main__":

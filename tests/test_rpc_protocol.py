@@ -100,6 +100,23 @@ async def test_client_remote_round_trip(use_inprocess_worker, live_server):
     assert result.msg == "echo:hello"
 
 
+async def test_client_remote_large_payload(use_inprocess_worker, live_server):
+    """A `c.remote` payload above the default 1 MB Socket.IO message cap
+    must round-trip — not kill the websocket.
+
+    Regression: Engine.IO's `max_http_buffer_size` (and the websocket
+    libraries' own caps) default to ~1 MB. An RPC argument or an LLM
+    request body easily exceeds that; before the caps were lifted the
+    connection was dropped mid-call. 8 MB exercises well past 1 MB.
+    """
+    use_inprocess_worker()
+    base_url = await live_server()
+    blob = "x" * (8 * 1024 * 1024)
+    async with RuntimeClient(base_url) as c:
+        result = await c.remote(len, blob)
+    assert result == len(blob)
+
+
 async def test_client_remote_raises_on_impl_error(use_inprocess_worker, live_server):
     use_inprocess_worker()
     base_url = await live_server()
