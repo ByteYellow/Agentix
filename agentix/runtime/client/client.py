@@ -178,6 +178,15 @@ class RuntimeClient:
             sio.on("call:result", _on_call_result)
             sio.on("call:error", _on_call_error)
 
+            async def _on_disconnect(*_args):
+                # The server keys in-flight calls by session id; once
+                # the connection drops, any pending `c.remote` can never
+                # receive its result. Fail them loudly instead of
+                # hanging forever.
+                self._fail_pending("runtime connection lost")
+
+            sio.on("disconnect", _on_disconnect)
+
             namespaces = ["/"]
             for ns in self._namespaces:
                 sio.register_namespace(ns)
@@ -187,6 +196,15 @@ class RuntimeClient:
             await sio.connect(self._base_url, namespaces=namespaces)
             self._sio = sio
             return sio
+
+    def _fail_pending(self, reason: str) -> None:
+        """Push an error onto every in-flight call's queue. Used when the
+        connection drops — a pending call's result is unrecoverable."""
+        for q in list(self._pending.values()):
+            q.put_nowait((
+                "error",
+                {"call_id": "", "error": {"type": "Disconnected", "message": reason}},
+            ))
 
     async def _route_event(self, kind: str, raw: Any) -> None:
         data = _decode_payload(raw)

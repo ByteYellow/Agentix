@@ -69,10 +69,19 @@ def make_sio(
     # in response to `agentix.register_namespace(...)`); the host may
     # connect to them before the forwarder is in place. Inbound events
     # are dropped until the forwarder registers, which is what we want.
+    #
+    # `ping_timeout=300`: a single `c.remote(...)` can run for many
+    # minutes (a coding agent, a long eval). During that time the host
+    # event loop may briefly be busy enough to delay a pong. A generous
+    # timeout keeps the connection alive across those blips — a dropped
+    # connection orphans the in-flight call. Genuinely dead peers are
+    # still reaped, just after 5 idle minutes instead of 20s.
     sio = socketio.AsyncServer(
         async_mode="asgi",
         cors_allowed_origins="*",
         namespaces="*",
+        ping_interval=25,
+        ping_timeout=300,
     )
     sessions: dict[str, _SessionState] = {}
     opened_namespaces: set[str] = set()  # paths the worker has opened
