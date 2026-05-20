@@ -175,12 +175,21 @@ def test_platform_bundle_builds_and_runs(platform: str, machine: str) -> None:
         out = _sh_platform(
             image,
             platform,
-            "uname -m && "
+            "set -eu; "
+            "uname -m; "
+            "test -d /nix/runtime/venv; "
+            "test -x /nix/runtime/bin/bash; "
+            "readlink -f /nix/runtime/venv/bin/python; "
+            "/nix/runtime/venv/bin/python --version; "
             "/nix/runtime/venv/bin/python -c "
-            "'import agentix, hello_bundle; print(hello_bundle.run())'",
+            "'import agentix, hello_bundle, agentix.bash; print(hello_bundle.run())'; "
+            "/nix/runtime/venv/bin/agentix-server --help",
         )
         lines = [line.strip() for line in out.splitlines() if line.strip()]
         assert lines[0] == machine
+        assert any(line.startswith("/nix/store/") for line in lines)
+        assert "Python 3.11" in out
         assert "hello, world" in out
+        assert "agentix-server" in out
     finally:
         subprocess.run(["docker", "rmi", "-f", image, f"{name}:latest"], capture_output=True)
