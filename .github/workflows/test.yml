@@ -55,6 +55,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: amd64,arm64
+      - uses: docker/setup-buildx-action@v3
       - name: sync workspace
         run: uv sync --all-packages --all-extras
       # `agentix build` drives `docker buildx`; Nix runs inside the

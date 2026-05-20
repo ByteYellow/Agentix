@@ -164,7 +164,10 @@ def test_platform_bundle_builds_and_runs(platform: str, machine: str) -> None:
 
     supported = _docker_buildx_platforms()
     if not _supports_platform(supported, platform):
-        pytest.skip(f"Docker buildx does not report support for {platform}: {sorted(supported)}")
+        msg = f"Docker buildx does not report support for {platform}: {sorted(supported)}"
+        if selected:
+            pytest.fail(msg)
+        pytest.skip(msg)
 
     arch = platform.rsplit("/", 1)[1]
     image = f"agentix-build-e2e-{arch}:pytest"
