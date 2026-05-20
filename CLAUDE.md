@@ -76,23 +76,39 @@ Agentix/                       — repo root = workspace root
 ├── agentix/                   — core source (see Systems Map below)
 ├── tests/                     — core tests
 ├── plugins/
-│   └── abridge/               — `agentix-bridge` package (import `agentix.bridge`)
-│       ├── pyproject.toml
-│       ├── agentix/bridge/
-│       └── tests/
+│   ├── abridge/               — `agentix-bridge` (import `agentix.bridge`)
+│   │   ├── pyproject.toml
+│   │   ├── agentix/bridge/
+│   │   └── tests/
+│   ├── deployment-docker/     — `agentix-deployment-docker` → `local`
+│   ├── deployment-daytona/    — `agentix-deployment-daytona` → `daytona`
+│   └── deployment-e2b/        — `agentix-deployment-e2b` → `e2b`
 └── examples/
     └── eval-cc-swe/           — `eval-cc-swe` cookbook example
 ```
 
+`[tool.uv.workspace] members = ["plugins/*"]` — drop a plugin dir under
+`plugins/` and it is a workspace member; `uv sync --all-packages`
+installs it editable.
+
+Each deployment-backend member is a single module that contributes a
+sibling into the core `agentix/deployment/` namespace (e.g.
+`agentix/deployment/docker.py`). The dirs carry no `__init__.py` — that
+file belongs to the core. The backend is wired in by its
+`[project.entry-points."agentix.deployment"]`, which the `Registry`
+discovers via `importlib.metadata` — so an editable workspace install
+makes `load_deployment("local")` work with no framework change.
+
 Dependency separation is preserved: each member has its own
 `pyproject.toml` + dependency list. The core never pulls a plugin's
-deps — `openai`, for instance, belongs to `agentix-bridge`, not
-`agentixx`. Members reference each other with
-`[tool.uv.sources] <dep> = { workspace = true }` (editable, no fetch).
+deps — `openai` belongs to `agentix-bridge`; the E2B/Daytona SDKs
+belong to their backend members, not `agentixx`. Members reference each
+other with `[tool.uv.sources] <dep> = { workspace = true }` (editable,
+no fetch).
 
 Runtime extension packages that are NOT in this repo
-(`agentix-runtime-basic`, `agentix-deployment-*`) ship from their own
-wheels and are updated in lockstep with HEAD.
+(`agentix-runtime-basic`) ship from their own wheels and are updated in
+lockstep with HEAD.
 
 ## Systems Map
 

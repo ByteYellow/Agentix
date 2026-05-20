@@ -82,16 +82,28 @@ select = ["E", "F", "I", "W", "UP"]
 # catches the obvious mistakes without drowning in advisory diagnostics.
 #
 # Scope: shipped library code only — the core (`agentix`) and the
-# bridge plugin package. Tests and cookbook examples are intentionally
+# plugin packages. Tests and cookbook examples are intentionally
 # NOT type-checked; they take liberties (loose `pickle.loads`, deep
 # `None`-narrowing) that aren't worth fighting pyright over.
-include = ["agentix", "plugins/abridge/agentix"]
+include = [
+    "agentix",
+    "plugins/abridge/agentix",
+    "plugins/deployment-docker/agentix",
+    "plugins/deployment-daytona/agentix",
+    "plugins/deployment-e2b/agentix",
+]
 exclude = ["**/__pycache__", "**/.venv", ".venv", "**/build"]
 # `agentix` is a pkgutil namespace package — the core lives here, the
-# bridge plugin contributes `agentix/bridge/` from `plugins/abridge/`.
-# `extraPaths` lets pyright resolve `agentix.bridge.*` statically (it
-# doesn't run `pkgutil.extend_path`).
-extraPaths = ["plugins/abridge"]
+# plugins contribute siblings: `agentix/bridge/` from `plugins/abridge/`
+# and `agentix/deployment/<backend>.py` from each `plugins/deployment-*`.
+# `extraPaths` lets pyright resolve those statically (it doesn't run
+# `pkgutil.extend_path`).
+extraPaths = [
+    "plugins/abridge",
+    "plugins/deployment-docker",
+    "plugins/deployment-daytona",
+    "plugins/deployment-e2b",
+]
 typeCheckingMode = "basic"
 # venv lives on local disk (the repo is on a slow FUSE mount); `.venv`
 # is a symlink to it. pyright follows the symlink for third-party stubs.

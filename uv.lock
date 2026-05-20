@@ -5,6 +5,9 @@ requires-python = ">=3.11"
 [manifest]
 members = [
     "agentix-bridge",
+    "agentix-deployment-daytona",
+    "agentix-deployment-docker",
+    "agentix-deployment-e2b",
     "agentixx",
 ]
 
@@ -28,8 +31,45 @@ requires-dist = [
 ]
 
 [[package]]
+name = "agentix-deployment-daytona"
+version = "0.1.2"
+source = { editable = "plugins/deployment-daytona" }
+dependencies = [
+    { name = "agentixx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "agentixx", editable = "." }]
+
+[[package]]
+name = "agentix-deployment-docker"
+version = "0.1.4"
+source = { editable = "plugins/deployment-docker" }
+dependencies = [
+    { name = "agentixx" },
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentixx", editable = "." },
+    { name = "httpx", specifier = ">=0.27" },
+]
+
+[[package]]
+name = "agentix-deployment-e2b"
+version = "0.1.2"
+source = { editable = "plugins/deployment-e2b" }
+dependencies = [
+    { name = "agentixx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "agentixx", editable = "." }]
+
+[[package]]
 name = "agentixx"
-version = "0.2.6"
+version = "0.2.7"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
