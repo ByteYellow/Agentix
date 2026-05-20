@@ -82,6 +82,10 @@ _STD_RECORD_KEYS = frozenset(
         "process",
         "message",
         "asctime",
+        # Added to LogRecord in Python 3.12; absent on 3.11. Listed
+        # unconditionally so a record produced on 3.12+ doesn't try to
+        # smuggle `taskName` through `extra=` into a fresh record.
+        "taskName",
     }
 )
 
@@ -137,7 +141,15 @@ def _replay_record(payload: dict[str, Any]) -> None:
     levelno = int(payload.get("levelno", logging.INFO))
     if not logger.isEnabledFor(levelno):
         return
-    extras = payload.get("extras") or {}
+    # `makeRecord` rejects any `extra` key that collides with a standard
+    # LogRecord attribute. Sender and receiver may run different Python
+    # versions (the sandbox could add a field this version doesn't have,
+    # or vice versa), so filter defensively rather than trusting the
+    # sender's `_STD_RECORD_KEYS`.
+    extras = {
+        k: v for k, v in (payload.get("extras") or {}).items()
+        if k not in _STD_RECORD_KEYS
+    }
     record = logger.makeRecord(
         name=logger.name,
         level=levelno,
@@ -146,7 +158,7 @@ def _replay_record(payload: dict[str, Any]) -> None:
         msg=str(payload.get("message", "")),
         args=(),
         exc_info=None,
-        extra=dict(extras),
+        extra=extras,
     )
     record.funcName = str(payload.get("funcName", ""))
     record.module = str(payload.get("module", ""))

@@ -1,0 +1,32 @@
+[project]
+name = "agentix-bridge"
+version = "0.2.0"
+description = "Provider-shaped HTTP proxies that bridge LLM calls across the agentix sandbox boundary (import as `agentix.bridge`)"
+requires-python = ">=3.11"
+dependencies = [
+    "agentixx",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "openai>=1.40",
+]
+
+# `agentixx` is the monorepo workspace root — used editable, never
+# from PyPI. Core edits are live here with no release step.
+[tool.uv.sources]
+agentixx = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.7,<0.9"]
+build-backend = "uv_build"
+
+# uv_build is uv's own backend — no extra build deps need to land in
+# the nix sandbox at build time. We ship under the `agentix.bridge`
+# namespace; tell uv_build where the module lives (the dist name
+# `agentix-bridge` doesn't match the directory layout).
+[tool.uv.build-backend]
+module-name = "agentix.bridge"
+module-root = ""
+namespace = true
+
+# ruff / pyright / pytest config is centralized in the workspace-root
+# pyproject.toml — this member doesn't repeat it.

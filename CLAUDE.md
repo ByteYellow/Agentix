@@ -62,8 +62,37 @@ This repo is in active design. Breaking changes are fine.
 - Update tests to the current shape; do not preserve tests for removed
   behavior.
 
-Sibling repos (`Agentix-Runtime-Basic`, `Agentix-Deployment-*`,
-`abridge`, `agentix-cookbook`) are updated in lockstep with HEAD.
+## Monorepo Layout
+
+Everything lives in this one repo, wired as a **uv workspace** — the
+core, the plugins, and the cookbook examples. Edit any file and it's
+live in the shared venv; there is no commit → push → publish cycle for
+day-to-day iteration.
+
+```text
+Agentix/                       — repo root = workspace root
+├── pyproject.toml             — `agentixx` core package + [tool.uv.workspace]
+├── uv.lock                    — one lock for the whole workspace
+├── agentix/                   — core source (see Systems Map below)
+├── tests/                     — core tests
+├── plugins/
+│   └── abridge/               — `agentix-bridge` package (import `agentix.bridge`)
+│       ├── pyproject.toml
+│       ├── agentix/bridge/
+│       └── tests/
+└── examples/
+    └── eval-cc-swe/           — `eval-cc-swe` cookbook example
+```
+
+Dependency separation is preserved: each member has its own
+`pyproject.toml` + dependency list. The core never pulls a plugin's
+deps — `openai`, for instance, belongs to `agentix-bridge`, not
+`agentixx`. Members reference each other with
+`[tool.uv.sources] <dep> = { workspace = true }` (editable, no fetch).
+
+Runtime extension packages that are NOT in this repo
+(`agentix-runtime-basic`, `agentix-deployment-*`) ship from their own
+wheels and are updated in lockstep with HEAD.
 
 ## Systems Map
 
@@ -248,7 +277,8 @@ venv, `uv pip install`.
 
 ## Typing — No Bypass
 
-CI runs `pyright agentix` and **must** stay at zero errors. If pyright
+CI runs `pyright` over the whole workspace and **must** stay at zero
+errors. If pyright
 flags something, **fix the root cause**, do not `# type: ignore`. Common
 patterns that lead to ignore-spam and what to do instead:
 
@@ -271,21 +301,18 @@ narrowest comment (`# type: ignore[specific-rule]`) and noting why.
 
 ## Development Distribution
 
-We do NOT publish to PyPI during active development. Sibling repos
-install each other via `[tool.uv.sources]` git URLs so HEAD changes
-propagate without a release cycle:
+The core, the plugins, and the examples are all members of one uv
+workspace (see Monorepo Layout). `uv sync` at the repo root installs
+every member editable into one venv:
 
-```toml
-[project]
-dependencies = [
-    "agentixx",
-    "abridge",
-]
-
-[tool.uv.sources]
-agentixx = { git = "https://github.com/Agentiix/Agentix.git" }
-abridge  = { git = "https://github.com/Agentiix/abridge.git" }
+```
+uv sync --all-extras      # once; sets up .venv with everything live
 ```
 
-When (rarely) a real release is cut, drop the matching `tool.uv.sources`
-entry so the resolver picks up the PyPI version.
+Day-to-day there is **no commit → push → publish cycle** — editing a
+file in `agentix/`, `plugins/abridge/`, or `examples/` is immediately
+effective for every other member, because they cross-reference via
+`[tool.uv.sources] <dep> = { workspace = true }`.
+
+PyPI publishing (`uv build` + `uv publish`) is reserved for real
+releases, not iteration.

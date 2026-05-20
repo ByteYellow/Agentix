@@ -53,6 +53,23 @@ packages = ["agentix"]
 # `agentix build` ships Nix builder templates under `agentix/nix/`;
 # hatchling includes non-.py files in packages automatically.
 
+# ── monorepo workspace ────────────────────────────────────────────
+# The core (`agentixx`, this file) plus the plugins under `plugins/*`
+# form one uv workspace. `uv sync` installs every member editable into
+# one venv — edit any file and it's live, no commit/push/publish.
+#
+# Dependency separation is preserved: each member keeps its own
+# `pyproject.toml` + dependency list. The core never pulls a plugin's
+# deps (e.g. `openai` stays in `agentix-bridge`).
+#
+# `examples/*` are deliberately NOT members — a cookbook example like
+# `eval-cc-swe` drags in heavy deps (swebench, datasets, pandas) that
+# don't belong in a core-dev venv. Each example is a standalone
+# project that path-depends on the workspace (editable), so it still
+# sees core edits live without a release step.
+[tool.uv.workspace]
+members = ["plugins/*"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"
@@ -63,10 +80,23 @@ select = ["E", "F", "I", "W", "UP"]
 [tool.pyright]
 # Strict mode is the goal; raise this gradually. Today's basic mode
 # catches the obvious mistakes without drowning in advisory diagnostics.
-include = ["agentix"]
-exclude = ["**/__pycache__", ".venv"]
+#
+# Scope: shipped library code only — the core (`agentix`) and the
+# bridge plugin package. Tests and cookbook examples are intentionally
+# NOT type-checked; they take liberties (loose `pickle.loads`, deep
+# `None`-narrowing) that aren't worth fighting pyright over.
+include = ["agentix", "plugins/abridge/agentix"]
+exclude = ["**/__pycache__", "**/.venv", ".venv", "**/build"]
+# `agentix` is a pkgutil namespace package — the core lives here, the
+# bridge plugin contributes `agentix/bridge/` from `plugins/abridge/`.
+# `extraPaths` lets pyright resolve `agentix.bridge.*` statically (it
+# doesn't run `pkgutil.extend_path`).
+extraPaths = ["plugins/abridge"]
 typeCheckingMode = "basic"
-pythonVersion = "3.11"
+# venv lives on local disk (the repo is on a slow FUSE mount); `.venv`
+# is a symlink to it. pyright follows the symlink for third-party stubs.
+venvPath = "."
+venv = ".venv"
 reportMissingImports = "error"
 reportUndefinedVariable = "error"
 reportGeneralTypeIssues = "warning"
