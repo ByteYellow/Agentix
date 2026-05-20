@@ -14,7 +14,7 @@ import logging
 import os
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -25,7 +25,20 @@ from agentix.runtime.shared.models import RemoteError, RemoteRequest, RemoteResp
 logger = logging.getLogger("agentix.runtime.server.worker.client")
 
 _WORKER_START_TIMEOUT = 15.0
-_DEFAULT_WORKER_PATH = "/usr/local/bin:/usr/bin:/bin"
+_WORKER_BOOTSTRAP = """
+import os
+import sys
+
+_cwd = os.getcwd()
+sys.path = [p for p in sys.path if p not in ("", ".", _cwd)]
+_import_root = os.environ.pop("AGENTIX_WORKER_IMPORT_ROOT", "")
+if _import_root and _import_root not in sys.path:
+    sys.path.insert(0, _import_root)
+from agentix.runtime.server.worker.process import main
+
+main()
+"""
+_WORKER_IMPORT_ROOT = Path(__file__).resolve().parents[4]
 # Plugin `default.nix` derivations are symlink-joined into this path
 # inside the bundle image (see `agentix/nix/builder.nix`). Worker code
 # (`subprocess.run("claude", ...)`, `c.remote(cc.run, ...)`, ...) must
@@ -42,6 +55,17 @@ _STRIPPED_ENV = {
 _STRIPPED_ENV_PREFIXES = ("NIX_", "FONTCONFIG_")
 
 
+def _join_path_entries(entries: Iterable[str]) -> str:
+    parts: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not entry or entry in seen:
+            continue
+        parts.append(entry)
+        seen.add(entry)
+    return os.pathsep.join(parts)
+
+
 def _clean_worker_env(runtime_bin_dir: Path | None) -> dict[str, str]:
     env = {
         key: value
@@ -49,16 +73,15 @@ def _clean_worker_env(runtime_bin_dir: Path | None) -> dict[str, str]:
         if key not in _STRIPPED_ENV and not any(key.startswith(prefix) for prefix in _STRIPPED_ENV_PREFIXES)
     }
     # Build PATH from: the venv's bin (`runtime_bin_dir`), the bundle's
-    # symlink-join (`/nix/runtime/bin`), then a minimal system fallback.
-    # Inside the bundle image the first two are siblings and both must
-    # be searchable; outside the bundle, only the first one exists.
+    # symlink-join (`/nix/runtime/bin`), then the parent environment's
+    # PATH. Inside the bundle image the first two are siblings and both
+    # must be searchable; outside the bundle, only the first one exists.
     parts: list[str] = []
     if runtime_bin_dir is not None:
         parts.append(str(runtime_bin_dir))
-    if _RUNTIME_BIN_PATH not in parts:
-        parts.append(_RUNTIME_BIN_PATH)
-    parts.append(_DEFAULT_WORKER_PATH)
-    env["PATH"] = ":".join(parts)
+    parts.append(_RUNTIME_BIN_PATH)
+    parts.extend(env.get("PATH", "").split(os.pathsep))
+    env["PATH"] = _join_path_entries(parts)
     return env
 
 
@@ -129,10 +152,11 @@ class _SubprocessWorker:
 
     async def start(self) -> None:
         env = _clean_worker_env(self._runtime_bin_dir)
+        env["AGENTIX_WORKER_IMPORT_ROOT"] = str(_WORKER_IMPORT_ROOT)
         self._proc = await asyncio.create_subprocess_exec(
             self._python,
-            "-m",
-            "agentix.runtime.server.worker",
+            "-c",
+            _WORKER_BOOTSTRAP,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=sys.stderr,
