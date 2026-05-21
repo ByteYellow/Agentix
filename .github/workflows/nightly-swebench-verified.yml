@@ -1,0 +1,86 @@
+name: nightly swebench verified
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-swebench-verified-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ground-truth:
+    name: ground truth shard ${{ matrix.shard_index }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard_index:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+          - 8
+          - 9
+          - 10
+          - 11
+          - 12
+          - 13
+          - 14
+          - 15
+          - 16
+          - 17
+          - 18
+          - 19
+    env:
+      BUNDLE_IMAGE: eval-cc-swe:nightly
+      NUM_SHARDS: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: swebench-verified-hf-${{ runner.os }}
+
+      - name: lock eval example
+        working-directory: examples/eval-cc-swe
+        run: uv lock
+
+      - name: build eval bundle
+        working-directory: examples/eval-cc-swe
+        run: uv run agentix build . --name "$BUNDLE_IMAGE" --platform linux/amd64
+
+      - name: evaluate ground-truth patches
+        working-directory: examples/eval-cc-swe
+        env:
+          SHARD_INDEX: ${{ matrix.shard_index }}
+        run: |
+          uv run python -m runner \
+            --ground-truth \
+            --fail-on-unresolved \
+            --bundle-image "$BUNDLE_IMAGE" \
+            --num-shards "$NUM_SHARDS" \
+            --shard-index "$SHARD_INDEX" \
+            --out "runs/ground-truth-shard-${SHARD_INDEX}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swebench-verified-ground-truth-${{ matrix.shard_index }}
+          path: examples/eval-cc-swe/runs/ground-truth-shard-${{ matrix.shard_index }}/
