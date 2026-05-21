@@ -81,18 +81,47 @@ exec /nix/runtime/venv/bin/agentix-server
 """.strip()
 
 
-async def _docker(*args: str, check: bool = True) -> tuple[int, bytes, bytes]:
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+async def _docker(*args: str, check: bool = True, retries: int = 0) -> tuple[int, bytes, bytes]:
+    attempt = 0
+    delay = 2.0
+    while True:
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        rc = proc.returncode or 0
+        if not check or rc == 0:
+            return rc, stdout, stderr
+        if attempt >= retries or not _is_transient_docker_error(stderr):
+            raise RuntimeError(f"docker {args[0]} failed: {stderr.decode(errors='replace')}")
+        attempt += 1
+        logger.warning(
+            "docker %s failed with transient error; retrying in %.1fs (%d/%d)",
+            args[0],
+            delay,
+            attempt,
+            retries,
+        )
+        await asyncio.sleep(delay)
+        delay *= 2
+
+
+def _is_transient_docker_error(stderr: bytes) -> bool:
+    text = stderr.decode(errors="replace").lower()
+    return any(
+        needle in text
+        for needle in (
+            "failed to fetch oauth token",
+            "unexpected status from post request",
+            "tls handshake timeout",
+            "connection reset by peer",
+            "i/o timeout",
+            "temporarily unavailable",
+        )
     )
-    stdout, stderr = await proc.communicate()
-    rc = proc.returncode or 0
-    if check and rc != 0:
-        raise RuntimeError(f"docker {args[0]} failed: {stderr.decode(errors='replace')}")
-    return rc, stdout, stderr
 
 
 def _carrier_name(runtime_image: str, platform: str | None = None) -> str:
@@ -126,7 +155,12 @@ class DockerDeployment(Deployment):
         carrier = _carrier_name(runtime_image, platform)
         rc, _, _ = await _docker("inspect", carrier, check=False)
         if rc == 0:
-            return carrier
+            current_image = await _image_id(runtime_image)
+            carrier_image = await _container_image_id(carrier)
+            if current_image and carrier_image and current_image != carrier_image:
+                await _docker("rm", "-f", carrier, check=False)
+            else:
+                return carrier
         platform_args = ["--platform", platform] if platform else []
         await _docker("create", *platform_args, "--name", carrier, runtime_image)
         return carrier
@@ -158,6 +192,7 @@ class DockerDeployment(Deployment):
             config.image,
             "-c",
             _RUNTIME_BOOTSTRAP,
+            retries=3,
         )
 
         self._ports[sandbox_id] = port
@@ -205,3 +240,17 @@ class DockerDeployment(Deployment):
         await _docker("rm", "-f", sandbox_id, check=False)
         self._ports.pop(sandbox_id, None)
         logger.info("Deleted sandbox %s", sandbox_id)
+
+
+async def _image_id(image: str) -> str | None:
+    rc, stdout, _ = await _docker("image", "inspect", "-f", "{{.Id}}", image, check=False)
+    if rc != 0:
+        return None
+    return stdout.decode().strip() or None
+
+
+async def _container_image_id(container: str) -> str | None:
+    rc, stdout, _ = await _docker("inspect", "-f", "{{.Image}}", container, check=False)
+    if rc != 0:
+        return None
+    return stdout.decode().strip() or None
