@@ -75,6 +75,7 @@ jobs:
             --ground-truth \
             --fail-on-unresolved \
             --bundle-image "$BUNDLE_IMAGE" \
+            --docker-platform linux/amd64 \
             --num-shards "$NUM_SHARDS" \
             --shard-index "$SHARD_INDEX" \
             --out "runs/ground-truth-shard-${SHARD_INDEX}"
