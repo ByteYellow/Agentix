@@ -42,16 +42,31 @@ from agentix import RuntimeClient
 from agentix.deployment.base import SandboxConfig, session
 
 WORKDIR = "/testbed"
+SWE_BENCH_VERIFIED_PR535_PARQUET = (
+    "https://raw.githubusercontent.com/SWE-bench/SWE-bench/"
+    "50b9f47a7cacd7084ae900b27840a3c7b1c8ca24/data/SWE-bench_Verified/test.parquet"
+)
 logger = logging.getLogger("eval_cc_swe.runner")
 
 
 def _instance_image(instance: dict, *, namespace: str, tag: str, arch: str) -> str:
-    iid = instance["instance_id"].lower()
-    return f"{namespace}/sweb.eval.{arch}.{iid}:{tag}".replace("__", "_1776_")
+    from swebench.harness.test_spec.test_spec import make_test_spec
+
+    image = make_test_spec(instance, namespace=namespace).instance_image_key
+    image = image.replace("arm64", arch).replace("x86_64", arch)
+    if tag != "latest":
+        image = f"{image.rsplit(':', 1)[0]}:{tag}"
+    return image
 
 
 def _make_openai_client(*, base_url: str, api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(base_url=base_url, api_key=api_key)
+
+
+def load_instances_dataset(dataset: str, *, split: str, dataset_file: str | None = None):
+    if dataset_file:
+        return load_dataset(dataset, data_files=dataset_file, split=split)
+    return load_dataset(dataset, split=split)
 
 
 async def _run_agent_phase(
@@ -327,6 +342,11 @@ async def main(argv: list[str] | None = None) -> int:
         help="Docker platform for the runtime and task containers, e.g. linux/amd64.",
     )
     parser.add_argument("--dataset", default="princeton-nlp/SWE-bench_Verified")
+    parser.add_argument(
+        "--dataset-file",
+        default=None,
+        help="Optional data file for dataset loaders such as parquet.",
+    )
     parser.add_argument("--split", default="test")
     parser.add_argument(
         "--limit",
@@ -383,7 +403,7 @@ async def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s [%(name)s] %(message)s",
     )
 
-    ds = load_dataset(args.dataset, split=args.split)
+    ds = load_instances_dataset(args.dataset, split=args.split, dataset_file=args.dataset_file)
     instances = _selected_instances(
         ds,
         instance_ids=args.instance_id,

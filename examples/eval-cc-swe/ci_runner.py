@@ -18,8 +18,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from datasets import load_dataset
-from runner import _selected_instances, _should_fail, evaluate_ground_truth_one
+from runner import (
+    SWE_BENCH_VERIFIED_PR535_PARQUET,
+    _selected_instances,
+    _should_fail,
+    evaluate_ground_truth_one,
+    load_instances_dataset,
+)
 
 logger = logging.getLogger("eval_cc_swe.ci_runner")
 
@@ -51,7 +56,7 @@ def _failure_reason(summary: dict[str, Any]) -> str:
 
 
 async def run_ci(args: argparse.Namespace) -> int:
-    ds = load_dataset(args.dataset, split=args.split)
+    ds = load_instances_dataset(args.dataset, split=args.split, dataset_file=args.dataset_file)
     instances = _selected_instances(
         ds,
         instance_ids=args.instance_id,
@@ -117,8 +122,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Docker platform for the runtime and task containers, e.g. linux/amd64.",
     )
-    parser.add_argument("--dataset", default="princeton-nlp/SWE-bench_Verified")
-    parser.add_argument("--split", default="test")
+    parser.add_argument("--dataset", default="parquet")
+    parser.add_argument("--dataset-file", default=SWE_BENCH_VERIFIED_PR535_PARQUET)
+    parser.add_argument("--split", default="train")
     parser.add_argument(
         "--limit",
         type=int,

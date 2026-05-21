@@ -14,11 +14,15 @@ Three remote-call entry points, mirroring the flow in
        working-tree edits — as a single unified diff string.
 
     3. `swe.eval(instance, patch)`
-       Reproduce SWE-bench's evaluation:
+       Reproduce the SWE-bench scoring contract without executing the
+       generated `test_spec.eval_script`:
          (a) write `patch` to `/tmp/patch.diff`, try the GIT_APPLY_CMDS
              fallback chain; emit APPLY_PATCH_PASS / APPLY_PATCH_FAIL.
-         (b) write `test_spec.eval_script` to `/eval.sh` and run it.
-         (c) grade the log via `get_eval_report`.
+         (b) derive the repository setup/install/base test command from the
+             `TestSpec`, reset/apply the test patch, and invoke the targeted
+             tests.
+         (c) parse and grade the test log locally against
+             `TestSpec.FAIL_TO_PASS/PASS_TO_PASS`.
        Returns `{resolved, patch_applied, tests_status}`.
 
 The intended host flow is two sandboxes per instance: one for the cc
@@ -30,6 +34,7 @@ image (`swebench/sweb.eval.x86_64.<id>:latest`) as the base.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shlex
@@ -49,29 +54,21 @@ GIT_APPLY_CMDS = [
     "patch --batch --fuzz=5 -p1 -i",
 ]
 
-ASTROPY_PYTEST_6_INSTANCES = {
-    "astropy__astropy-8707",
-    "astropy__astropy-8872",
-}
+APPLY_PATCH_FAIL = ">>>>> Patch Apply Failed"
+APPLY_PATCH_PASS = ">>>>> Applied Patch"
+START_TEST_OUTPUT = ">>>>> Start Test Output"
+END_TEST_OUTPUT = ">>>>> End Test Output"
+TESTS_TIMEOUT = ">>>>> Tests Timed Out"
 
-ASTROPY_STDLIB_DISTUTILS_INSTANCES = {
-    "astropy__astropy-8872",
-}
+FAIL_TO_PASS = "FAIL_TO_PASS"
+PASS_TO_PASS = "PASS_TO_PASS"
+PASSED = "PASSED"
+FAILED = "FAILED"
+SKIPPED = "SKIPPED"
+ERROR = "ERROR"
+XFAIL = "XFAIL"
 
-PSF_REQUESTS_LOCAL_HTTPBIN_INSTANCES = {
-    "psf__requests-1724",
-    "psf__requests-1766",
-    "psf__requests-2317",
-}
-
-PSF_REQUESTS_TARPIT_TIMEOUT_INSTANCES = {
-    "psf__requests-2317",
-    "psf__requests-2931",
-    "psf__requests-5414",
-}
-
-ASTROPY_7606_EMPTY_PARAM = "astropy/units/tests/test_units.py::test_compose_roundtrip[]"
-ASTROPY_7606_EMPTY_PARAM_BASE = ASTROPY_7606_EMPTY_PARAM[:-2]
+NON_TEST_EXTS = (".json", ".png", "csv", ".txt", ".md", ".jpg", ".jpeg", ".pkl", ".yml", ".yaml", ".toml")
 
 
 @dataclass
@@ -93,6 +90,14 @@ class EvalResult:
     git_diff_after: str = ""
     apply_log: str = ""
     test_log: str = ""
+
+
+@dataclass
+class EvalPlan:
+    setup_commands: list[str]
+    install_commands: list[str]
+    test_cmd: str
+    test_files: list[str]
 
 
 async def clean(workdir: str = TESTBED, base_commit: str | None = None) -> CleanResult:
@@ -150,15 +155,7 @@ async def eval(
     apply_timeout: float = 120,
     eval_timeout: float = 1800,
 ) -> EvalResult:
-    """Apply `patch` in `workdir`, run the instance's eval_script, grade."""
-    from swebench.harness.constants import (
-        APPLY_PATCH_FAIL,
-        APPLY_PATCH_PASS,
-        KEY_INSTANCE_ID,
-        KEY_MODEL,
-        KEY_PREDICTION,
-    )
-    from swebench.harness.grading import get_eval_report
+    """Apply `patch` in `workdir`, run targeted SWE-bench tests, grade."""
     from swebench.harness.test_spec.test_spec import make_test_spec
 
     spec = make_test_spec(instance)
@@ -203,15 +200,13 @@ async def eval(
 
     git_diff_before = await _capture_diff(workdir)
 
-    # (b) Run the eval script. test_spec.eval_script handles applying
-    # test_patch and invoking the test command with START/END markers.
-    eval_script = workroot / "eval.sh"
-    eval_script_text, known_fixes = _prepare_eval_script(spec, instance, spec.eval_script)
-    eval_script.write_text(eval_script_text)
-    eval_script.chmod(0o755)
-
     test_log_path = workroot / "test_output.log"
-    test_log = await _run_script(eval_script, test_log_path, timeout=eval_timeout)
+    test_log, known_fixes = await _run_swebench_tests(
+        spec=spec,
+        instance=instance,
+        workdir=workdir,
+        timeout=eval_timeout,
+    )
 
     # The grading function expects APPLY_PATCH_PASS / APPLY_PATCH_FAIL
     # in the same log file it parses for test results.
@@ -220,19 +215,13 @@ async def eval(
 
     git_diff_after = await _capture_diff(workdir)
 
-    # (c) Grade with the official report function.
-    pred = {
-        KEY_INSTANCE_ID: spec.instance_id,
-        KEY_MODEL: "eval-cc-swe",
-        KEY_PREDICTION: patch,
-    }
-    report = get_eval_report(
-        test_spec=spec,
-        prediction=pred,
-        test_log_path=str(test_log_path),
-        include_tests_status=True,
+    # (c) Grade locally against the gold lists carried by TestSpec.
+    entry, grading_fixes = _score_eval_log(
+        spec=spec,
+        patch=patch,
+        patch_applied=applied_with is not None,
+        combined_log=combined_log,
     )
-    entry, grading_fixes = _apply_known_grading_fixes(spec, report.get(spec.instance_id, {}), combined_log)
     known_fixes.extend(grading_fixes)
     tests = entry.get("tests_status", {}) or {}
     ftp = tests.get("FAIL_TO_PASS", {"success": [], "failure": []})
@@ -268,78 +257,186 @@ async def _capture_diff(workdir: str) -> str:
     return out.decode(errors="replace").strip()
 
 
-def _prepare_eval_script(
+async def _run_swebench_tests(
+    *,
     spec: Any,
     instance: dict[str, Any],
-    eval_script: str,
+    workdir: str,
+    timeout: float,
 ) -> tuple[str, list[str]]:
-    """Normalize SWE-bench's eval script, then patch instance-scoped environment drift."""
-    known_fixes: list[str] = []
-    eval_script, runner_fixes = _normalize_swebench_eval_script(instance, eval_script)
-    known_fixes.extend(runner_fixes)
-    eval_script, image_fixes = _patch_eval_script_for_known_image_issues(spec, eval_script)
-    known_fixes.extend(image_fixes)
-    return eval_script, known_fixes
+    """Apply SWE-bench's test patch and run targeted tests without generated eval scripts."""
+    from agentix.runtime.env import get_env_without_agentix
 
-
-def _normalize_swebench_eval_script(instance: dict[str, Any], eval_script: str) -> tuple[str, list[str]]:
-    """Apply upstream-compatible fixes to SWE-bench's generated eval script."""
+    env = get_env_without_agentix()
+    plan = _eval_plan_from_test_spec(spec, instance)
+    log_parts: list[str] = []
     known_fixes: list[str] = []
-    eval_script, fixed = _fix_swebench_new_file_only_test_patch_reset(
-        base_commit=str(instance.get("base_commit", "")),
-        test_patch=str(instance.get("test_patch", "")),
-        eval_script=eval_script,
-    )
-    if fixed:
+    run_full_test_command = False
+    test_files = list(plan.test_files)
+    if not test_files:
+        test_files, missing_status_directives = _test_directives_from_status_with_missing(instance)
+        if missing_status_directives:
+            test_files = []
+            run_full_test_command = True
+            known_fixes.append("swebench:full-test-command-fallback")
+    modified_paths, touched_paths = _extract_test_patch_paths(str(instance["test_patch"]))
+    base_commit = str(instance["base_commit"])
+
+    async def shell(command: str, *, command_timeout: float | None = None) -> int:
+        code, out = await _run_conda_shell(command, workdir=workdir, env=env, timeout=command_timeout or timeout)
+        log_parts.append(f"$ {command}\n{out}\n")
+        return code
+
+    async def git(*args: str) -> int:
+        code, out = await _run_exec(("git", *args), workdir=workdir, env=env, timeout=timeout)
+        log_parts.append(f"$ git {' '.join(shlex.quote(arg) for arg in args)}\n{out}\n")
+        return code
+
+    async def abort(reason: str) -> tuple[str, list[str]]:
+        log_parts.append(f"aborting SWE-bench test run: {reason}\n")
+        return "".join(log_parts), known_fixes
+
+    code = await git("config", "--global", "--add", "safe.directory", workdir)
+    if code != 0:
+        return await abort("failed to configure git safe.directory")
+
+    for command in plan.setup_commands:
+        if _apply_export_command(command, env):
+            log_parts.append(f"$ {command}\n")
+        else:
+            code = await shell(command)
+            if code != 0:
+                return await abort(f"eval command failed: {command}")
+
+    if _is_old_astropy(instance):
+        code = await shell("python -m pip install 'pytest<7' --verbose")
+        if code != 0:
+            return await abort("failed to install legacy Astropy pytest dependency")
+        env["SETUPTOOLS_USE_DISTUTILS"] = "stdlib"
+        known_fixes.append("astropy:legacy-test-deps")
+    if _patch_django_legacy_sqlite_schema_editor(Path(workdir), instance):
+        known_fixes.append("django:legacy-sqlite-alter-table")
+
+    install_commands = [] if instance["repo"] == "scikit-learn/scikit-learn" else plan.install_commands
+    for install_command in install_commands:
+        code = await shell(install_command)
+        if code != 0:
+            return await abort(f"install command failed: {install_command}")
+
+    if modified_paths:
+        code = await git("checkout", base_commit, *modified_paths)
+        if code != 0:
+            return await abort("failed to reset tracked test-patch files")
+    if touched_paths and not modified_paths:
         known_fixes.append("swebench:new-file-only-test-patch-reset")
-    return eval_script, known_fixes
+    await _cleanup_untracked_paths(Path(workdir), touched_paths, log_parts, env)
+
+    Path("/tmp/test_patch.diff").write_text(str(instance["test_patch"]))
+    code = await git("apply", "--check", "/tmp/test_patch.diff")
+    if code != 0:
+        return await abort("test patch failed git apply --check")
+    code = await git("apply", "/tmp/test_patch.diff")
+    if code != 0:
+        return await abort("test patch failed git apply")
+
+    quoted_test_files = " ".join(shlex.quote(path) for path in test_files)
+    if not quoted_test_files and not run_full_test_command:
+        return await abort("could not derive targeted test directives")
+    test_invocation = plan.test_cmd if run_full_test_command else f"{plan.test_cmd} {quoted_test_files}"
+    log_parts.append(f": '{START_TEST_OUTPUT}'\n")
+    await shell(test_invocation, command_timeout=timeout)
+    log_parts.append(f": '{END_TEST_OUTPUT}'\n")
+
+    if modified_paths:
+        await git("checkout", base_commit, *modified_paths)
+    await _cleanup_untracked_paths(Path(workdir), touched_paths, log_parts, env)
+    return "".join(log_parts), known_fixes
 
 
-def _patch_eval_script_for_known_image_issues(spec: Any, eval_script: str) -> tuple[str, list[str]]:
-    """Patch instance-scoped SWE-bench environment drift before tests run."""
-    known_fixes: list[str] = []
-    if spec.instance_id in ASTROPY_PYTEST_6_INSTANCES:
-        eval_script = _fix_astropy_pytest_7_incompat(spec.instance_id, eval_script)
-        known_fixes.append(f"{spec.instance_id}:pytest<7")
-    if spec.instance_id in ASTROPY_STDLIB_DISTUTILS_INSTANCES:
-        eval_script = _fix_astropy_distutils_version_warning(spec.instance_id, eval_script)
-        known_fixes.append(f"{spec.instance_id}:stdlib-distutils")
-    if spec.instance_id == "django__django-10097":
-        eval_script = _fix_django_10097_sqlite_legacy_alter_table(eval_script)
-        known_fixes.append("django__django-10097:sqlite-legacy-alter-table")
-    if spec.instance_id in PSF_REQUESTS_LOCAL_HTTPBIN_INSTANCES:
-        eval_script = _fix_psf_requests_local_httpbin(eval_script)
-        known_fixes.append(f"{spec.instance_id}:local-httpbin")
-    if spec.instance_id in PSF_REQUESTS_TARPIT_TIMEOUT_INSTANCES:
-        eval_script = _fix_psf_requests_tarpit_connect_timeout(eval_script)
-        known_fixes.append(f"{spec.instance_id}:tarpit-connect-timeout")
-    return eval_script, known_fixes
+def _eval_plan_from_test_spec(spec: Any, instance: dict[str, Any]) -> EvalPlan:
+    """Extract the commands we need from TestSpec without executing its script."""
+    commands = [str(command).strip() for command in spec.eval_script_list if str(command).strip()]
+    start_marker = f": '{START_TEST_OUTPUT}'"
+    try:
+        test_marker_index = commands.index(start_marker)
+        generated_test_command = commands[test_marker_index + 1]
+    except (ValueError, IndexError) as exc:
+        raise ValueError(f"TestSpec for {spec.instance_id} does not contain a runnable test command") from exc
 
+    test_files = _test_directives_from_patch(instance["repo"], str(instance["test_patch"]))
+    test_cmd = _strip_test_directive_suffix(generated_test_command, test_files)
 
-def _fix_swebench_new_file_only_test_patch_reset(
-    *,
-    base_commit: str,
-    test_patch: str,
-    eval_script: str,
-) -> tuple[str, bool]:
-    # Mirrors upstream SWE-bench's fix for new-file-only test patches: an
-    # empty checkout path list must not become a whole-repo reset.
-    modified_paths, touched_paths = _extract_test_patch_paths(test_patch)
-    if not base_commit or modified_paths or not touched_paths:
-        return eval_script, False
+    try:
+        setup_end = next(
+            index
+            for index, command in enumerate(commands)
+            if command.startswith("git config --global --add safe.directory")
+        )
+    except StopIteration as exc:
+        raise ValueError(f"TestSpec for {spec.instance_id} does not contain the safe.directory command") from exc
 
-    quoted_paths = " ".join(shlex.quote(path) for path in touched_paths)
-    cleanup = (
-        ": 'agentix upstream harness fix: new-file-only test_patch must not reset the whole repo'\n"
-        f"for path in {quoted_paths}; do\n"
-        '  if [ -e "$path" ] && ! git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then\n'
-        '    rm -rf -- "$path"\n'
-        "  fi\n"
-        "done"
+    setup_commands = [
+        command
+        for command in commands[:setup_end]
+        if not _is_eval_script_boilerplate(command) and not _is_git_info_command(command)
+    ]
+
+    try:
+        apply_index = next(index for index, command in enumerate(commands) if command.startswith("git apply -v - <<"))
+        reset_index = next(
+            index
+            for index, command in enumerate(commands[:apply_index])
+            if command.startswith(f"git checkout {instance['base_commit']}")
+        )
+    except StopIteration as exc:
+        raise ValueError(f"TestSpec for {spec.instance_id} does not contain a test-patch apply sequence") from exc
+
+    install_commands = [
+        command
+        for command in commands[setup_end + 1 : reset_index]
+        if not _is_eval_script_boilerplate(command) and not _is_git_info_command(command)
+    ]
+
+    return EvalPlan(
+        setup_commands=setup_commands,
+        install_commands=install_commands,
+        test_cmd=test_cmd,
+        test_files=test_files,
     )
-    pattern = re.compile(rf"(?m)^git checkout {re.escape(base_commit)}[ \t]*$")
-    fixed, count = pattern.subn(cleanup, eval_script)
-    return fixed, count > 0
+
+
+def _is_eval_script_boilerplate(command: str) -> bool:
+    return (
+        command == "source /opt/miniconda3/bin/activate"
+        or command.startswith("conda activate ")
+        or command.startswith("cd ")
+    )
+
+
+def _is_git_info_command(command: str) -> bool:
+    return command in {"git status", "git show"} or command.startswith("git -c core.fileMode=false diff ")
+
+
+def _test_directives_from_patch(repo: str, test_patch: str) -> list[str]:
+    directives = re.findall(r"diff --git a/.* b/(.*)", test_patch)
+    directives = [directive for directive in directives if not any(directive.endswith(ext) for ext in NON_TEST_EXTS)]
+    if repo == "django/django":
+        transformed = []
+        for directive in directives:
+            if directive.endswith(".py"):
+                directive = directive[: -len(".py")]
+            if directive.startswith("tests/"):
+                directive = directive[len("tests/") :]
+            transformed.append(directive.replace("/", "."))
+        directives = transformed
+    return list(dict.fromkeys(directives))
+
+
+def _strip_test_directive_suffix(command: str, directives: list[str]) -> str:
+    suffix = " ".join(directives)
+    if suffix and command.endswith(f" {suffix}"):
+        return command[: -(len(suffix) + 1)].rstrip()
+    return command
 
 
 def _extract_test_patch_paths(test_patch: str) -> tuple[list[str], list[str]]:
@@ -353,46 +450,73 @@ def _extract_test_patch_paths(test_patch: str) -> tuple[list[str], list[str]]:
         for path in re.findall(r"^\+\+\+ b/(.*)$", test_patch, re.MULTILINE)
         if path != "/dev/null"
     ]
-    return list(dict.fromkeys(preimage_paths)), list(dict.fromkeys(postimage_paths))
+    return list(dict.fromkeys(preimage_paths)), list(dict.fromkeys(preimage_paths + postimage_paths))
 
 
-def _fix_astropy_pytest_7_incompat(instance_id: str, eval_script: str) -> str:
-    # These 2019 Astropy snapshots use nose-style setup hooks and a warning policy
-    # that is incompatible with pytest 7.x installed by the regenerated image.
-    return _insert_before_once(
-        eval_script,
-        "python -m pip install -e .[test] --verbose",
-        (f": 'agentix known image fix: {instance_id} requires pytest<7'\npython -m pip install 'pytest<7' --verbose\n"),
-    )
+def _test_directives_from_status(instance: dict[str, Any]) -> list[str]:
+    directives, _ = _test_directives_from_status_with_missing(instance)
+    return directives
 
 
-def _fix_astropy_distutils_version_warning(instance_id: str, eval_script: str) -> str:
-    # The image's setuptools shim redirects distutils.version to
-    # setuptools._distutils, whose Version classes warn even on Python 3.9.
-    # Astropy 4.0-dev turns deprecations into errors during collection.
-    return _insert_before_once(
-        eval_script,
-        "pytest -rA astropy/units/tests/test_quantity.py",
-        (
-            f": 'agentix known image fix: {instance_id} uses stdlib distutils under old warning policy'\n"
-            "export SETUPTOOLS_USE_DISTUTILS=stdlib\n"
-        ),
-    )
+def _test_directives_from_status_with_missing(instance: dict[str, Any]) -> tuple[list[str], int]:
+    directives: list[str] = []
+    missing = 0
+    for key in ("FAIL_TO_PASS", "PASS_TO_PASS"):
+        for test_name in _load_test_status_list(instance.get(key, [])):
+            directive = _test_directive_from_status_name(test_name)
+            if directive:
+                directives.append(directive)
+            else:
+                missing += 1
+    return list(dict.fromkeys(directives)), missing
 
 
-def _fix_django_10097_sqlite_legacy_alter_table(eval_script: str) -> str:
-    # Django 2.2-dev predates SQLite 3.26's ALTER TABLE rename behavior. The
-    # eval image has SQLite 3.45, which rewrites M2M foreign keys to
-    # django_site__old during migrations unless legacy_alter_table is enabled.
-    return _insert_before_once(
-        eval_script,
-        "python setup.py install",
-        r'''python - <<'PY'
-from pathlib import Path
+def _load_test_status_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        loaded = json.loads(value)
+    else:
+        loaded = value
+    return [str(item) for item in loaded]
 
-path = Path('django/db/backends/sqlite3/schema.py')
-text = path.read_text()
-old = """    def __enter__(self):
+
+def _test_directive_from_status_name(test_name: str) -> str | None:
+    if "::" in test_name:
+        return test_name
+    match = re.search(r"\(([^()]+)\)", test_name)
+    if not match:
+        return None
+    dotted = match.group(1)
+    if "." not in dotted or " " in dotted:
+        return None
+    return dotted
+
+
+def _is_old_astropy(instance: dict[str, Any]) -> bool:
+    if instance["repo"] != "astropy/astropy":
+        return False
+    major_minor = _major_minor_version(str(instance["version"]))
+    return major_minor is not None and major_minor <= (3, 1)
+
+
+def _major_minor_version(version: str) -> tuple[int, int] | None:
+    match = re.match(r"^(\d+)\.(\d+)", version)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _patch_django_legacy_sqlite_schema_editor(workdir: Path, instance: dict[str, Any]) -> bool:
+    if instance["repo"] != "django/django":
+        return False
+    major_minor = _major_minor_version(str(instance["version"]))
+    if major_minor is None or major_minor > (2, 2):
+        return False
+
+    path = workdir / "django/db/backends/sqlite3/schema.py"
+    text = path.read_text()
+    if "PRAGMA legacy_alter_table = ON" in text:
+        return False
+    old = """    def __enter__(self):
         # Some SQLite schema alterations need foreign key constraints to be
         # disabled. Enforce it here for the duration of the transaction.
         self.connection.disable_constraint_checking()
@@ -402,7 +526,7 @@ old = """    def __enter__(self):
         super().__exit__(exc_type, exc_value, traceback)
         self.connection.enable_constraint_checking()
 """
-new = """    def __enter__(self):
+    new = """    def __enter__(self):
         # Some SQLite schema alterations need foreign key constraints to be
         # disabled. Enforce it here for the duration of the transaction.
         self.connection.disable_constraint_checking()
@@ -418,338 +542,369 @@ new = """    def __enter__(self):
                 cursor.execute('PRAGMA legacy_alter_table = OFF')
             self.connection.enable_constraint_checking()
 """
-if old not in text:
-    raise SystemExit('django__django-10097 SQLite schema fix target not found')
-path.write_text(text.replace(old, new))
-PY
-''',
-    )
-
-
-def _fix_psf_requests_local_httpbin(eval_script: str) -> str:
-    # requests 2.0-era tests depend on public httpbin.org, which makes Oracle
-    # grading depend on Docker DNS/proxy/routing state. Current Requests tests
-    # use pytest-httpbin/httpbin fixtures; mirror that by routing these legacy
-    # URLs to a local stdlib httpbin-compatible shim.
-    return _insert_before_once(
-        eval_script,
-        "pytest -rA test_requests.py",
-        r"""openssl req -x509 -newkey rsa:2048 -days 1 -nodes \
-  -keyout /tmp/agentix-httpbin.key \
-  -out /tmp/agentix-httpbin.crt \
-  -subj /CN=httpbin.org \
-  -addext subjectAltName=DNS:localhost,DNS:httpbin.org >/tmp/agentix-httpbin-openssl.log 2>&1
-python - <<'PY'
-import requests.certs
-
-with open(requests.certs.where(), 'ab') as out, open('/tmp/agentix-httpbin.crt', 'rb') as cert:
-    out.write(b'\n')
-    out.write(cert.read())
-PY
-if ! grep -q ' httpbin.org' /etc/hosts; then
-  echo '127.0.0.1 httpbin.org' >> /etc/hosts
-fi
-cat > /tmp/agentix_httpbin.py <<'PY'
-from http.cookies import SimpleCookie
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
-import base64
-import gzip
-import hashlib
-import json
-import ssl
-import threading
-import time
-
-REALM = 'testrealm'
-NONCE = 'agentix'
-OPAQUE = 'agentix'
-
-
-def _one(query):
-    return {key: values if len(values) != 1 else values[0] for key, values in query.items()}
-
-
-def _headers(headers):
-    return {key: value for key, value in headers.items()}
-
-
-def _cookies(header):
-    cookie = SimpleCookie()
-    if header:
-        cookie.load(header)
-    return {key: morsel.value for key, morsel in cookie.items()}
-
-
-def _parse_digest(value):
-    if not value or not value.lower().startswith('digest '):
-        return {}
-    parsed = {}
-    for part in value[7:].split(','):
-        if '=' not in part:
-            continue
-        key, raw_value = part.strip().split('=', 1)
-        parsed[key] = raw_value.strip().strip('"')
-    return parsed
-
-
-def _digest_ok(method, authorization, password='pass'):
-    parsed = _parse_digest(authorization)
-    if parsed.get('username') != 'user':
+    if old not in text:
         return False
-    if parsed.get('realm') != REALM or parsed.get('nonce') != NONCE:
-        return False
+    path.write_text(text.replace(old, new))
+    return True
 
-    uri = parsed.get('uri', '')
-    qop = parsed.get('qop')
-    ha1 = hashlib.md5(f'user:{REALM}:{password}'.encode()).hexdigest()
-    ha2 = hashlib.md5(f'{method}:{uri}'.encode()).hexdigest()
-    if qop:
-        digest_source = f"{ha1}:{NONCE}:{parsed.get('nc')}:{parsed.get('cnonce')}:{qop}:{ha2}"
+
+def _score_eval_log(
+    *,
+    spec: Any,
+    patch: str | None,
+    patch_applied: bool,
+    combined_log: str,
+) -> tuple[dict[str, Any], list[str]]:
+    if patch is None:
+        return {
+            "patch_is_None": True,
+            "patch_exists": False,
+            "patch_successfully_applied": False,
+            "resolved": False,
+            "tests_status": _eval_tests_report({}, spec),
+        }, []
+
+    test_output = _extract_marked_test_output(combined_log)
+    if patch_applied and test_output is not None:
+        status_map = _parse_eval_statuses(test_output or combined_log, spec)
     else:
-        digest_source = f'{ha1}:{NONCE}:{ha2}'
-    return parsed.get('response') == hashlib.md5(digest_source.encode()).hexdigest()
+        status_map = {}
+    report = _eval_tests_report(status_map, spec)
+    entry = {
+        "patch_is_None": False,
+        "patch_exists": True,
+        "patch_successfully_applied": patch_applied,
+        "resolved": patch_applied and TESTS_TIMEOUT not in combined_log and _report_is_resolved(report),
+        "tests_status": report,
+    }
+    entry, fixes = _apply_grading_normalizations(entry, combined_log)
+    if TESTS_TIMEOUT in combined_log:
+        entry["resolved"] = False
+    return entry, fixes
 
 
-class Handler(BaseHTTPRequestHandler):
-    protocol_version = 'HTTP/1.1'
-    server_version = 'agentix-httpbin'
-
-    def log_message(self, fmt, *args):
-        return
-
-    def _send(self, status=200, body=b'', headers=None):
-        self.send_response(status)
-        for key, value in (headers or {}).items():
-            if isinstance(value, (list, tuple)):
-                for item in value:
-                    self.send_header(key, item)
-            else:
-                self.send_header(key, value)
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        if self.command != 'HEAD':
-            self.wfile.write(body)
-
-    def _json(self, payload, status=200, headers=None):
-        response_headers = {'Content-Type': 'application/json'}
-        response_headers.update(headers or {})
-        self._send(status, json.dumps(payload).encode(), response_headers)
-
-    def _redirect(self, location, status=302, headers=None):
-        response_headers = {'Location': location}
-        response_headers.update(headers or {})
-        self._send(status, b'', response_headers)
-
-    def _basic_auth(self):
-        expected = 'Basic ' + base64.b64encode(b'user:pass').decode()
-        if self.headers.get('Authorization') == expected:
-            self._json({'authenticated': True, 'user': 'user'})
-        else:
-            self._send(401, b'', {'WWW-Authenticate': 'Basic realm=Fake Realm'})
-
-    def _digest_auth(self):
-        if _digest_ok(self.command, self.headers.get('Authorization')):
-            self._send(200, b'authenticated', {'Set-Cookie': 'fake=fake_value'})
-            return
-        challenge = f'Digest realm="{REALM}", nonce="{NONCE}", qop="auth", opaque="{OPAQUE}"'
-        self._send(401, b'', {'WWW-Authenticate': challenge, 'Set-Cookie': 'fake=fake_value'})
-
-    def do_HEAD(self):
-        self.do_GET()
-
-    def do_PUT(self):
-        self.do_POST()
-
-    def do_POST(self):
-        parsed = urlparse(self.path)
-        length = int(self.headers.get('Content-Length', '0') or '0')
-        body = b''
-        if length:
-            body = self.rfile.read(length)
-        payload = {
-            'args': _one(parse_qs(parsed.query, keep_blank_values=True)),
-            'data': body.decode(errors='replace'),
-            'headers': _headers(self.headers),
-            'json': None,
-        }
-        if 'application/json' in self.headers.get('Content-Type', ''):
-            payload['json'] = json.loads(body.decode() or 'null')
-        self._json(payload)
-
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        path = parsed.path
-        args = _one(parse_qs(parsed.query, keep_blank_values=True))
-        if path in ('', '/') or path == '/get' or path.startswith('/get/'):
-            self._json({'args': args, 'headers': _headers(self.headers), 'url': self.path})
-        elif path.startswith('/delay/'):
-            time.sleep(1.0)
-            self._json({'args': args, 'headers': _headers(self.headers), 'url': self.path})
-        elif path == '/headers':
-            self._json({'headers': _headers(self.headers)})
-        elif path == '/user-agent':
-            self._json({'user-agent': self.headers.get('User-Agent', '')})
-        elif path == '/cookies':
-            self._json({'cookies': _cookies(self.headers.get('Cookie'))})
-        elif path == '/cookies/set':
-            cookies = [f'{key}={value}; Path=/' for key, value in args.items()]
-            self._redirect('/cookies', headers={'Set-Cookie': cookies})
-        elif path.startswith('/redirect/'):
-            try:
-                count = int(path.rsplit('/', 1)[1])
-            except ValueError:
-                count = 1
-            self._redirect('/get' if count <= 1 else f'/redirect/{count - 1}')
-        elif path == '/redirect-to':
-            self._redirect(args.get('url', '/get'))
-        elif path == '/response-headers':
-            self._json({'headers': args}, headers={key: value for key, value in args.items()})
-        elif path == '/basic-auth/user/pass':
-            self._basic_auth()
-        elif path == '/digest-auth/auth/user/pass':
-            self._digest_auth()
-        elif path.startswith('/status/'):
-            self._send(int(path.rsplit('/', 1)[1]), b'')
-        elif path == '/gzip':
-            body = gzip.compress(json.dumps({'gzipped': True, 'headers': _headers(self.headers)}).encode())
-            self._send(200, body, {'Content-Type': 'application/json', 'Content-Encoding': 'gzip'})
-        elif path == '/html':
-            self._send(200, b'<html><body>ok</body></html>', {'Content-Type': 'text/html'})
-        else:
-            self._json({'args': args, 'headers': _headers(self.headers), 'url': self.path})
+def _extract_marked_test_output(log: str) -> str | None:
+    if START_TEST_OUTPUT not in log or END_TEST_OUTPUT not in log:
+        return None
+    return log.split(START_TEST_OUTPUT, 1)[1].split(END_TEST_OUTPUT, 1)[0]
 
 
-def _serve(port, cert=None, key=None):
-    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    if cert:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(cert, key)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+def _eval_tests_report(status_map: dict[str, str], spec: Any) -> dict[str, dict[str, list[str]]]:
+    return {
+        FAIL_TO_PASS: _score_gold_tests(list(spec.FAIL_TO_PASS), status_map),
+        PASS_TO_PASS: _score_gold_tests(list(spec.PASS_TO_PASS), status_map),
+    }
 
 
-_serve(80)
-_serve(443, '/tmp/agentix-httpbin.crt', '/tmp/agentix-httpbin.key')
-print('agentix local httpbin ready', flush=True)
-threading.Event().wait()
-PY
-python /tmp/agentix_httpbin.py >/tmp/agentix-httpbin.log 2>&1 &
-for i in $(seq 1 50); do
-  python - <<'PY' >/dev/null 2>&1 && break || sleep 0.1
-import urllib.request
-
-urllib.request.urlopen('http://localhost/get', timeout=1).read()
-PY
-done
-export HTTPBIN_URL=http://localhost/
-export NO_PROXY="httpbin.org,localhost,127.0.0.1${NO_PROXY:+,$NO_PROXY}"
-export no_proxy="$NO_PROXY"
-""",
-    )
+def _score_gold_tests(gold_tests: list[str], status_map: dict[str, str]) -> dict[str, list[str]]:
+    success: list[str] = []
+    failure: list[str] = []
+    for test_name in gold_tests:
+        status = status_map.get(test_name)
+        if status in {PASSED, XFAIL}:
+            success.append(test_name)
+        elif status is None or status in {FAILED, ERROR}:
+            failure.append(test_name)
+    return {"success": success, "failure": failure}
 
 
-def _fix_psf_requests_tarpit_connect_timeout(eval_script: str) -> str:
-    # Several requests tests assume 10.255.255.1 blackholes TCP connect. Docker
-    # Desktop currently routes it to a live-but-silent endpoint, producing read
-    # timeouts or responses instead of ConnectTimeout. Restore the intended
-    # sentinel behavior at the socket boundary for that exact address.
-    return _insert_before_once(
-        eval_script,
-        "pytest -rA",
-        r'''python - <<'PY'
-from pathlib import Path
-
-path = Path('conftest.py')
-addition = r"""
-import socket
-
-_agentix_socket_connect = socket.socket.connect
+def _report_is_resolved(report: dict[str, dict[str, list[str]]]) -> bool:
+    return _score_ratio(report[FAIL_TO_PASS]) == 1 and _score_ratio(report[PASS_TO_PASS]) == 1
 
 
-def _agentix_tarpit_connect(self, address):
-    if isinstance(address, tuple) and address and address[0] == "10.255.255.1":
-        raise socket.timeout("timed out")
-    return _agentix_socket_connect(self, address)
+def _score_ratio(status: dict[str, list[str]]) -> float:
+    total = len(status["success"]) + len(status["failure"])
+    if total == 0:
+        return 1
+    return len(status["success"]) / total
 
 
-socket.socket.connect = _agentix_tarpit_connect
-"""
-text = path.read_text() if path.exists() else ''
-if '_agentix_tarpit_connect' not in text:
-    path.write_text(text.rstrip() + '\n\n' + addition.lstrip())
-PY
-''',
-    )
+def _parse_eval_statuses(log: str, spec: Any) -> dict[str, str]:
+    parser = _PARSERS_BY_REPO.get(spec.repo, _parse_log_pytest_v2)
+    return parser(log, spec)
 
 
-def _insert_before_once(eval_script: str, needle: str, insertion: str) -> str:
-    if insertion in eval_script:
-        return eval_script
-    if needle not in eval_script:
-        raise ValueError(f"cannot patch eval script; missing line: {needle}")
-    return eval_script.replace(needle, insertion + needle, 1)
+def _parse_log_pytest(log: str, spec: Any) -> dict[str, str]:
+    status_map: dict[str, str] = {}
+    for raw_line in log.splitlines():
+        line = raw_line.strip()
+        if not _line_starts_status(line):
+            continue
+        if line.startswith(FAILED):
+            line = line.replace(" - ", " ")
+        parts = line.split()
+        if len(parts) >= 2:
+            status_map[parts[1]] = parts[0]
+    return status_map
 
 
-def _apply_known_grading_fixes(spec: Any, entry: dict[str, Any], combined_log: str) -> tuple[dict[str, Any], list[str]]:
+def _parse_log_pytest_options(log: str, spec: Any) -> dict[str, str]:
+    status_map: dict[str, str] = {}
+    option_pattern = re.compile(r"(.*?)\[(.*)\]")
+    for raw_line in log.splitlines():
+        line = raw_line.strip()
+        if not _line_starts_status(line):
+            continue
+        if line.startswith(FAILED):
+            line = line.replace(" - ", " ")
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        test_name = parts[1]
+        match = option_pattern.search(test_name)
+        if match:
+            main, option = match.groups()
+            if option.startswith("/") and not option.startswith("//") and "*" not in option:
+                option = "/" + option.split("/")[-1]
+            test_name = f"{main}[{option}]"
+        status_map[test_name] = parts[0]
+    return status_map
+
+
+def _parse_log_pytest_v2(log: str, spec: Any) -> dict[str, str]:
+    status_map: dict[str, str] = {}
+    escapes = "".join(chr(char) for char in range(1, 32))
+    for raw_line in log.splitlines():
+        line = re.sub(r"\[(\d+)m", "", raw_line.strip()).translate(str.maketrans("", "", escapes))
+        if _line_starts_status(line):
+            if line.startswith(FAILED):
+                line = line.replace(" - ", " ")
+            parts = line.split()
+            if len(parts) >= 2:
+                status_map[parts[1]] = parts[0]
+        elif _line_ends_status(line):
+            parts = line.split()
+            if len(parts) >= 2:
+                status_map[parts[0]] = parts[1]
+    return status_map
+
+
+def _parse_log_django(log: str, spec: Any) -> dict[str, str]:
+    status_map: dict[str, str] = {}
+    prev_test: str | None = None
+    for raw_line in log.splitlines():
+        line = raw_line.strip()
+        if "--version is equivalent to version" in line:
+            status_map["--version is equivalent to version"] = PASSED
+        if " ... " in line:
+            prev_test = line.split(" ... ")[0]
+        for suffix in (" ... ok", " ... OK", " ...  OK"):
+            if line.endswith(suffix):
+                if line.startswith("Applying sites.0002_alter_domain_unique...test_no_migrations"):
+                    line = line.split("...", 1)[-1].strip()
+                status_map[line.rsplit(suffix, 1)[0]] = PASSED
+                break
+        if " ... skipped" in line:
+            status_map[line.split(" ... skipped")[0]] = SKIPPED
+        if line.endswith(" ... FAIL"):
+            status_map[line.split(" ... FAIL")[0]] = FAILED
+        if line.startswith("FAIL:"):
+            status_map[line.split()[1].strip()] = FAILED
+        if line.endswith(" ... ERROR"):
+            status_map[line.split(" ... ERROR")[0]] = ERROR
+        if line.startswith("ERROR:"):
+            status_map[line.split()[1].strip()] = ERROR
+        if line.lstrip().startswith("ok") and prev_test is not None:
+            status_map[prev_test] = PASSED
+
+    patterns = [
+        r"^(.*?)\s\.\.\.\sTesting\ against\ Django\ installed\ in\ ((?s:.*?))\ silenced\)\.\nok$",
+        r"^(.*?)\s\.\.\.\sInternal\ Server\ Error:\ \/(.*)\/\nok$",
+        r"^(.*?)\s\.\.\.\sSystem check identified no issues \(0 silenced\)\nok$",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, log, re.MULTILINE):
+            status_map[match.group(1)] = PASSED
+    return status_map
+
+
+def _parse_log_seaborn(log: str, spec: Any) -> dict[str, str]:
+    status_map: dict[str, str] = {}
+    for raw_line in log.splitlines():
+        line = raw_line.strip()
+        if line.startswith(FAILED):
+            parts = line.split()
+            if len(parts) >= 2:
+                status_map[parts[1]] = FAILED
+        elif f" {PASSED} " in line:
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == PASSED:
+                status_map[parts[0]] = PASSED
+        elif line.startswith(PASSED):
+            parts = line.split()
+            if len(parts) >= 2:
+                status_map[parts[1]] = PASSED
+    return status_map
+
+
+def _parse_log_matplotlib(log: str, spec: Any) -> dict[str, str]:
+    return _parse_log_pytest(log.replace("MouseButton.LEFT", "1").replace("MouseButton.RIGHT", "3"), spec)
+
+
+def _parse_log_sympy(log: str, spec: Any) -> dict[str, str]:
+    status_map: dict[str, str] = {}
+    for match in re.findall(r"(_*) (.*)\.py:(.*) (_*)", log):
+        status_map[f"{match[1]}.py:{match[2]}"] = FAILED
+    for raw_line in log.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("test_"):
+            continue
+        test_name = line.split()[0]
+        if line.endswith(" E"):
+            status_map[test_name] = ERROR
+        if line.endswith(" F"):
+            status_map[test_name] = FAILED
+        if line.endswith(" ok"):
+            status_map[test_name] = PASSED
+    return status_map
+
+
+def _line_starts_status(line: str) -> bool:
+    return any(line.startswith(status) for status in (FAILED, PASSED, SKIPPED, ERROR, XFAIL))
+
+
+def _line_ends_status(line: str) -> bool:
+    return any(line.endswith(status) for status in (FAILED, PASSED, SKIPPED, ERROR, XFAIL))
+
+
+_PARSERS_BY_REPO = {
+    "astropy/astropy": _parse_log_pytest_v2,
+    "django/django": _parse_log_django,
+    "matplotlib/matplotlib": _parse_log_matplotlib,
+    "mwaskom/seaborn": _parse_log_seaborn,
+    "pallets/flask": _parse_log_pytest,
+    "psf/requests": _parse_log_pytest_options,
+    "pydata/xarray": _parse_log_pytest,
+    "pylint-dev/pylint": _parse_log_pytest_options,
+    "pytest-dev/pytest": _parse_log_pytest,
+    "scikit-learn/scikit-learn": _parse_log_pytest_v2,
+    "sphinx-doc/sphinx": _parse_log_pytest_v2,
+    "sympy/sympy": _parse_log_sympy,
+}
+
+
+def _apply_grading_normalizations(entry: dict[str, Any], combined_log: str) -> tuple[dict[str, Any], list[str]]:
+    entry = dict(entry)
+    tests = dict(entry.get("tests_status", {}) or {})
     known_fixes: list[str] = []
-    if spec.instance_id == "astropy__astropy-7606":
-        entry, fixed = _fix_astropy_7606_empty_param_node_id(entry, combined_log)
-        if fixed:
-            known_fixes.append("astropy__astropy-7606:empty-param-node-id")
+    changed = False
+
+    for bucket in ("FAIL_TO_PASS", "PASS_TO_PASS"):
+        status = dict(tests.get(bucket, {}) or {})
+        success = list(status.get("success", []))
+        failure = list(status.get("failure", []))
+        remaining_failure: list[str] = []
+
+        for test_name in failure:
+            if _pytest_empty_param_alias_passed(test_name, combined_log):
+                success.append(test_name)
+                changed = True
+            else:
+                remaining_failure.append(test_name)
+
+        status["success"] = list(dict.fromkeys(success))
+        status["failure"] = remaining_failure
+        tests[bucket] = status
+
+    if changed:
+        entry["tests_status"] = tests
+        ftp = tests.get("FAIL_TO_PASS", {}) or {}
+        ptp = tests.get("PASS_TO_PASS", {}) or {}
+        entry["resolved"] = not ftp.get("failure") and not ptp.get("failure")
+        known_fixes.append("pytest:empty-param-id-alias")
+
     return entry, known_fixes
 
 
-def _fix_astropy_7606_empty_param_node_id(entry: dict[str, Any], combined_log: str) -> tuple[dict[str, Any], bool]:
-    # test_compose_roundtrip uses ids=str(unit); the dimensionless unit's string
-    # id is empty. Pytest fills an empty generated id as unitN, so accept only
-    # the unique unitN node that the log proves passed for this exact test.
-    tests = entry.get("tests_status", {}) or {}
-    ptp = tests.get("PASS_TO_PASS", {}) or {}
-    failures = list(ptp.get("failure", []))
-    if failures != [ASTROPY_7606_EMPTY_PARAM]:
-        return entry, False
-
-    passed_aliases = sorted(
-        set(re.findall(rf"({re.escape(ASTROPY_7606_EMPTY_PARAM_BASE)}\[unit\d+\]) PASSED", combined_log)),
+def _pytest_empty_param_alias_passed(test_name: str, combined_log: str) -> bool:
+    if not test_name.endswith("[]"):
+        return False
+    base = test_name[:-2]
+    aliases = set(
+        re.findall(
+            rf"(?m)^{re.escape(base)}\[[A-Za-z_]\w*\d+\] PASSED(?:\s|$)",
+            combined_log,
+        )
     )
-    if len(passed_aliases) != 1:
-        return entry, False
-
-    fixed = dict(entry)
-    fixed_tests = dict(tests)
-    fixed_ptp = {
-        "success": list(ptp.get("success", [])) + [ASTROPY_7606_EMPTY_PARAM],
-        "failure": [],
-    }
-    fixed_tests["PASS_TO_PASS"] = fixed_ptp
-    fixed["tests_status"] = fixed_tests
-
-    ftp = fixed_tests.get("FAIL_TO_PASS", {}) or {}
-    fixed["resolved"] = not ftp.get("failure") and not fixed_ptp["failure"]
-    return fixed, True
+    return len(aliases) == 1
 
 
-async def _run_script(path: Path, log_path: Path, *, timeout: float) -> str:
-    """Run `path` under bash, return combined stdout+stderr text."""
-    from agentix.runtime.env import get_env_without_agentix
+async def _run_conda_shell(
+    command: str,
+    *,
+    workdir: str,
+    env: dict[str, str],
+    timeout: float,
+) -> tuple[int, str]:
+    wrapped = f"source /opt/miniconda3/bin/activate\nconda activate testbed\n{command}"
+    return await _run_exec(("/bin/bash", "-lc", wrapped), workdir=workdir, env=env, timeout=timeout)
 
+
+async def _run_exec(
+    args: tuple[str, ...],
+    *,
+    workdir: str,
+    env: dict[str, str],
+    timeout: float,
+) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(
-        "/bin/bash",
-        str(path),
-        env=get_env_without_agentix(),
+        *args,
+        cwd=workdir,
+        env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return out.decode(errors="replace")
+        return proc.returncode or 0, out.decode(errors="replace")
     except TimeoutError:
-        from swebench.harness.constants import TESTS_TIMEOUT
-
         proc.kill()
-        await proc.communicate()
-        return f"{TESTS_TIMEOUT}\nscript {path.name} timed out after {timeout}s\n"
+        out, _ = await proc.communicate()
+        text = out.decode(errors="replace")
+        return 124, f"{text}\n{TESTS_TIMEOUT}\ncommand timed out after {timeout}s: {shlex.join(args)}\n"
+
+
+def _apply_export_command(command: str, env: dict[str, str]) -> bool:
+    if not command.startswith("export "):
+        return False
+    assignments = shlex.split(command[len("export ") :])
+    if not assignments or any("=" not in item for item in assignments):
+        return False
+    for item in assignments:
+        key, value = item.split("=", 1)
+        env[key] = value
+    return True
+
+
+async def _cleanup_untracked_paths(
+    root: Path,
+    paths: list[str],
+    log_parts: list[str],
+    env: dict[str, str],
+) -> None:
+    root = root.resolve()
+    for path in paths:
+        target = (root / path).resolve()
+        if root != target and root not in target.parents:
+            log_parts.append(f"skip cleanup outside testbed: {path}\n")
+            continue
+        if not target.exists():
+            continue
+        code, out = await _run_exec(
+            ("git", "ls-files", "--error-unmatch", "--", path),
+            workdir=str(root),
+            env=env,
+            timeout=30,
+        )
+        log_parts.append(f"$ git ls-files --error-unmatch -- {shlex.quote(path)}\n{out}\n")
+        if code == 0:
+            continue
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        log_parts.append(f"removed untracked test patch path: {path}\n")
+
 
 
 __all__ = ["clean", "get_patch", "eval", "CleanResult", "EvalResult"]
