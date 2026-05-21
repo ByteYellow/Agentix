@@ -78,7 +78,9 @@ async def _run_agent_phase(
         client.register_namespace(gateway)
         async with client as c:
             cleaned = await c.remote(
-                swe.clean, workdir=WORKDIR, base_commit=inst["base_commit"],
+                swe.clean,
+                workdir=WORKDIR,
+                base_commit=inst["base_commit"],
             )
             if not cleaned.ok:
                 print(f"[{iid}] clean failed:\n{cleaned.log[-500:]}")
@@ -115,13 +117,89 @@ async def _run_agent_phase(
 
 
 async def _run_eval_phase(
-    inst: dict, *, cfg: SandboxConfig, patch: str, eval_timeout: float,
+    inst: dict,
+    *,
+    cfg: SandboxConfig,
+    patch: str,
+    eval_timeout: float,
 ) -> swe.EvalResult:
     async with session(DockerDeployment(), cfg) as sandbox:
         async with RuntimeClient(sandbox.runtime_url) as c:
-            return await c.remote(
-                swe.eval, instance=inst, patch=patch, eval_timeout=eval_timeout,
+            cleaned = await c.remote(
+                swe.clean,
+                workdir=WORKDIR,
+                base_commit=inst["base_commit"],
             )
+            if not cleaned.ok:
+                tail = cleaned.log[-1000:]
+                message = f"failed to reset {WORKDIR} to {inst['base_commit']}:\n{tail}"
+                raise RuntimeError(message)
+            return await c.remote(
+                swe.eval,
+                instance=inst,
+                patch=patch,
+                eval_timeout=eval_timeout,
+            )
+
+
+async def evaluate_ground_truth_one(
+    inst: dict,
+    *,
+    bundle_image: str,
+    swebench_namespace: str,
+    swebench_tag: str,
+    arch: str,
+    eval_timeout: float,
+    out_dir: Path,
+) -> dict:
+    iid = inst["instance_id"]
+    patch = inst.get("patch") or ""
+    base_image = _instance_image(
+        inst,
+        namespace=swebench_namespace,
+        tag=swebench_tag,
+        arch=arch,
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"{iid}.patch").write_text(patch)
+    if not patch.strip():
+        summary = {"instance_id": iid, "skipped": "empty_ground_truth_patch"}
+        (out_dir / f"{iid}.json").write_text(json.dumps(summary, indent=2))
+        return summary
+
+    cfg = SandboxConfig(image=base_image, runtime_image=bundle_image)
+    started = time.time()
+    print(f"[{iid}] ground-truth eval sandbox: {base_image}")
+    print(f"[{iid}] patch_bytes={len(patch)}")
+    ev = await _run_eval_phase(
+        inst,
+        cfg=cfg,
+        patch=patch,
+        eval_timeout=eval_timeout,
+    )
+
+    summary = {
+        "instance_id": iid,
+        "mode": "ground_truth",
+        "resolved": ev.resolved,
+        "patch_applied": ev.patch_applied,
+        "apply_cmd": ev.apply_cmd,
+        "fail_to_pass": ev.fail_to_pass,
+        "pass_to_pass": ev.pass_to_pass,
+        "duration_s": round(time.time() - started, 1),
+    }
+    (out_dir / f"{iid}.json").write_text(json.dumps(summary, indent=2))
+
+    verdict = "PASS" if ev.resolved else "FAIL"
+    ftp_ok = len(ev.fail_to_pass.get("success", []))
+    ftp_n = ftp_ok + len(ev.fail_to_pass.get("failure", []))
+    print(
+        f"[{iid}] {verdict}  patch_applied={ev.patch_applied}  "
+        f"resolved={ftp_ok}/{ftp_n}  "
+        f"regressions={len(ev.pass_to_pass.get('failure', []))}  "
+        f"({summary['duration_s']}s)"
+    )
+    return summary
 
 
 async def solve_one(
@@ -142,7 +220,10 @@ async def solve_one(
 ) -> dict:
     iid = inst["instance_id"]
     base_image = _instance_image(
-        inst, namespace=swebench_namespace, tag=swebench_tag, arch=arch,
+        inst,
+        namespace=swebench_namespace,
+        tag=swebench_tag,
+        arch=arch,
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     cfg = SandboxConfig(image=base_image, runtime_image=bundle_image)
@@ -150,12 +231,14 @@ async def solve_one(
     print(f"[{iid}] agent sandbox: {base_image}")
     started = time.time()
     agent = await _run_agent_phase(
-        inst, cfg=cfg,
+        inst,
+        cfg=cfg,
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         upstream_model=upstream_model,
         response_model=response_model,
-        cc_timeout=cc_timeout, max_turns=max_turns,
+        cc_timeout=cc_timeout,
+        max_turns=max_turns,
     )
     if "patch" not in agent:
         return agent
@@ -168,7 +251,10 @@ async def solve_one(
 
     print(f"[{iid}] eval sandbox")
     ev = await _run_eval_phase(
-        inst, cfg=cfg, patch=patch, eval_timeout=eval_timeout,
+        inst,
+        cfg=cfg,
+        patch=patch,
+        eval_timeout=eval_timeout,
     )
 
     summary = {
@@ -194,6 +280,42 @@ async def solve_one(
     return summary
 
 
+def _selected_instances(
+    ds,
+    *,
+    instance_ids: list[str] | None,
+    limit: int | None,
+    ground_truth: bool,
+    num_shards: int,
+    shard_index: int,
+) -> list[dict]:
+    if num_shards < 1:
+        raise SystemExit("--num-shards must be >= 1")
+    if shard_index < 0 or shard_index >= num_shards:
+        raise SystemExit("--shard-index must be >= 0 and < --num-shards")
+    if limit is not None and limit < 1:
+        raise SystemExit("--limit must be >= 1")
+
+    if instance_ids:
+        wanted = set(instance_ids)
+        instances = [dict(row) for row in ds if row["instance_id"] in wanted]
+        found = {inst["instance_id"] for inst in instances}
+        missing = sorted(wanted - found)
+        if missing:
+            raise SystemExit(f"unknown --instance-id value(s): {', '.join(missing)}")
+    else:
+        selected_limit = limit
+        if selected_limit is None:
+            selected_limit = len(ds) if ground_truth else 1
+        instances = [dict(ds[i]) for i in range(min(selected_limit, len(ds)))]
+
+    return [inst for i, inst in enumerate(instances) if i % num_shards == shard_index]
+
+
+def _should_fail(summary: dict) -> bool:
+    return not summary.get("patch_applied") or not summary.get("resolved")
+
+
 async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bundle-image", default="eval-cc-swe:0.2.0")
@@ -202,8 +324,25 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--arch", default="x86_64", choices=["x86_64", "arm64"])
     parser.add_argument("--dataset", default="princeton-nlp/SWE-bench_Verified")
     parser.add_argument("--split", default="test")
-    parser.add_argument("--limit", type=int, default=1)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Number of dataset rows to run. Defaults to 1 for agent mode and all rows for --ground-truth.",
+    )
     parser.add_argument("--instance-id", action="append", default=None)
+    parser.add_argument(
+        "--ground-truth",
+        action="store_true",
+        help="Skip the agent phase and evaluate each row's SWE-bench gold patch.",
+    )
+    parser.add_argument(
+        "--fail-on-unresolved",
+        action="store_true",
+        help="Exit non-zero if any selected instance is unresolved, fails patch apply, is skipped, or errors.",
+    )
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument(
         "--openai-base-url",
         default=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
@@ -228,7 +367,7 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="runs")
     args = parser.parse_args(argv)
 
-    if not args.openai_api_key:
+    if not args.ground_truth and not args.openai_api_key:
         print(
             "error: --openai-api-key (or OPENAI_API_KEY) is required",
             file=sys.stderr,
@@ -241,32 +380,53 @@ async def main(argv: list[str] | None = None) -> int:
     )
 
     ds = load_dataset(args.dataset, split=args.split)
-    if args.instance_id:
-        wanted = set(args.instance_id)
-        instances = [dict(row) for row in ds if row["instance_id"] in wanted]
-    else:
-        instances = [dict(ds[i]) for i in range(args.limit)]
+    instances = _selected_instances(
+        ds,
+        instance_ids=args.instance_id,
+        limit=args.limit,
+        ground_truth=args.ground_truth,
+        num_shards=args.num_shards,
+        shard_index=args.shard_index,
+    )
+    if not instances:
+        print("error: no instances selected", file=sys.stderr)
+        return 2
+    print(
+        f"selected {len(instances)} instance(s) "
+        f"(shard {args.shard_index + 1}/{args.num_shards}, ground_truth={args.ground_truth})"
+    )
 
     out_dir = Path(args.out)
     summaries: list[dict] = []
     for inst in instances:
         iid = inst["instance_id"]
         try:
-            s = await solve_one(
-                inst,
-                bundle_image=args.bundle_image,
-                swebench_namespace=args.swebench_namespace,
-                swebench_tag=args.swebench_tag,
-                arch=args.arch,
-                openai_base_url=args.openai_base_url,
-                openai_api_key=args.openai_api_key,
-                upstream_model=args.upstream_model,
-                response_model=args.response_model,
-                cc_timeout=args.cc_timeout,
-                eval_timeout=args.eval_timeout,
-                max_turns=args.max_turns,
-                out_dir=out_dir,
-            )
+            if args.ground_truth:
+                s = await evaluate_ground_truth_one(
+                    inst,
+                    bundle_image=args.bundle_image,
+                    swebench_namespace=args.swebench_namespace,
+                    swebench_tag=args.swebench_tag,
+                    arch=args.arch,
+                    eval_timeout=args.eval_timeout,
+                    out_dir=out_dir,
+                )
+            else:
+                s = await solve_one(
+                    inst,
+                    bundle_image=args.bundle_image,
+                    swebench_namespace=args.swebench_namespace,
+                    swebench_tag=args.swebench_tag,
+                    arch=args.arch,
+                    openai_base_url=args.openai_base_url,
+                    openai_api_key=args.openai_api_key,
+                    upstream_model=args.upstream_model,
+                    response_model=args.response_model,
+                    cc_timeout=args.cc_timeout,
+                    eval_timeout=args.eval_timeout,
+                    max_turns=args.max_turns,
+                    out_dir=out_dir,
+                )
         except Exception as exc:
             # One instance blowing up (sandbox error, lost connection,
             # ...) must not abort the whole run — record and move on.
@@ -275,8 +435,14 @@ async def main(argv: list[str] | None = None) -> int:
         summaries.append(s)
 
     resolved = sum(1 for s in summaries if s.get("resolved"))
+    failures = [s for s in summaries if _should_fail(s)]
     print(f"\n{resolved}/{len(summaries)} resolved")
+    if failures:
+        failed_ids = ", ".join(str(s.get("instance_id")) for s in failures)
+        print(f"{len(failures)} failed: {failed_ids}", file=sys.stderr)
     (out_dir / "summary.json").write_text(json.dumps(summaries, indent=2))
+    if args.fail_on_unresolved and failures:
+        return 1
     return 0
 
 
