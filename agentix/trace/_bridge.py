@@ -11,7 +11,6 @@ it on connect.
 
 from __future__ import annotations
 
-import asyncio
 import contextvars
 from typing import Any
 
@@ -76,7 +75,7 @@ class _ForwardProcessor(trace.Processor):
         if not _sio._is_installed():
             return
         try:
-            asyncio.get_running_loop().create_task(self._ns.emit(event, payload))
+            _sio._emit_nowait(self._ns.namespace, event, payload)
         except RuntimeError:
             pass
 

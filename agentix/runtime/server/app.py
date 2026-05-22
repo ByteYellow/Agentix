@@ -23,12 +23,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from agentix import __version__
+from agentix.log import configure_logging
 from agentix.runtime.server.sio import make_sio
 from agentix.runtime.server.worker import RuntimeWorkerClient
 from agentix.runtime.shared.models import HealthResponse
 
+configure_logging(default_context="sandbox-{uname}")
 logger = logging.getLogger("agentix.runtime")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
 
 @asynccontextmanager

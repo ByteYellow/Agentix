@@ -40,6 +40,7 @@ from openai import AsyncOpenAI
 
 from agentix import RuntimeClient
 from agentix.deployment.base import SandboxConfig, session
+from agentix.log import configure_logging
 
 WORKDIR = "/testbed"
 logger = logging.getLogger("eval_cc_swe.runner")
@@ -419,10 +420,7 @@ async def main(argv: list[str] | None = None) -> int:
         print("error: --concurrency must be >= 1", file=sys.stderr)
         return 2
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(message)s",
-    )
+    configure_logging(default_context="host")
 
     ds = _load_instances_dataset(args.dataset, split=args.split, dataset_file=args.dataset_file)
     instances = _selected_instances(

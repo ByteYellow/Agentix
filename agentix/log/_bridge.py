@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
 import socketio
 
 from agentix import sio as _sio
+from agentix.log._config import LOG_CONTEXT_ATTR
 
 NAMESPACE = "/log"
 
@@ -48,10 +48,7 @@ class WorkerLogHandler(logging.Handler):
         try:
             payload = _record_payload(record)
             ns = _get_worker_namespace()
-            asyncio.get_running_loop().create_task(ns.emit("record", payload))
-        except RuntimeError:
-            # No running loop — drop the record (worker is between async ticks).
-            pass
+            _sio._emit_nowait(ns.namespace, "record", payload)
         except Exception:
             self.handleError(record)
 
@@ -86,6 +83,7 @@ _STD_RECORD_KEYS = frozenset(
         # unconditionally so a record produced on 3.12+ doesn't try to
         # smuggle `taskName` through `extra=` into a fresh record.
         "taskName",
+        LOG_CONTEXT_ATTR,
     }
 )
 
@@ -105,6 +103,7 @@ def _record_payload(record: logging.LogRecord) -> dict[str, Any]:
         "exc_text": record.exc_text
         or (logging.Formatter().formatException(record.exc_info) if record.exc_info else None),
         "stack_info": record.stack_info,
+        LOG_CONTEXT_ATTR: getattr(record, LOG_CONTEXT_ATTR, None),
         "extras": extras or None,
     }
 
@@ -166,6 +165,8 @@ def _replay_record(payload: dict[str, Any]) -> None:
         record.exc_text = str(payload["exc_text"])
     if payload.get("stack_info"):
         record.stack_info = str(payload["stack_info"])
+    if payload.get(LOG_CONTEXT_ATTR):
+        setattr(record, LOG_CONTEXT_ATTR, str(payload[LOG_CONTEXT_ATTR]))
     logger.handle(record)
 
 

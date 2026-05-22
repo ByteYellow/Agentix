@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import logging
 
-__all__ = ["install_worker_bridge"]
+from agentix.log._config import configure_logging
+
+__all__ = ["configure_logging", "install_worker_bridge"]
 
 
 def install_worker_bridge(level: int = logging.NOTSET) -> logging.Handler:

@@ -10,6 +10,7 @@ import time
 import pytest
 
 from agentix import AsyncClientNamespace, RuntimeClient
+from agentix.log._config import LOG_CONTEXT_ATTR
 from tests._namespace_target import (
     echo_via_namespace,
     emit_formatted_log,
@@ -131,6 +132,9 @@ async def test_log_records_arrive_on_host(live_server):
 
     # Plain log line.
     assert "from sandbox" in messages
+    context = getattr(messages["from sandbox"], LOG_CONTEXT_ATTR, "")
+    assert context.startswith("sandbox-")
+    assert "-worker-" in context
 
     # %-style formatting: getMessage() already ran in the sandbox.
     assert "user alice acted on doc-7" in messages
@@ -145,3 +149,57 @@ async def test_log_records_arrive_on_host(live_server):
     exc_rec = messages.get("caught one")
     assert exc_rec is not None
     assert exc_rec.exc_text and "ValueError: kaboom" in exc_rec.exc_text
+
+
+@pytest.mark.asyncio
+async def test_log_record_arrives_before_remote_returns(live_server):
+    base_url = await live_server()
+
+    captured: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.name == "namespace_target":
+                captured.append(record)
+
+    target_logger = logging.getLogger("namespace_target")
+    target_logger.setLevel(logging.INFO)
+    handler = _Capture()
+    target_logger.addHandler(handler)
+    try:
+        async with RuntimeClient(base_url) as c:
+            await c.remote(emit_log_line, "flushed before result", "INFO")
+            record = next((r for r in captured if r.getMessage() == "flushed before result"), None)
+            assert record is not None
+            context = getattr(record, LOG_CONTEXT_ATTR, "")
+            assert context.startswith("sandbox-")
+            assert "-worker-" in context
+    finally:
+        target_logger.removeHandler(handler)
+
+
+@pytest.mark.asyncio
+async def test_worker_log_context_can_be_configured_with_env(live_server, monkeypatch):
+    monkeypatch.setenv("AGENTIX_WORKER_LOG_CONTEXT", "custom-worker-{id}")
+    base_url = await live_server()
+
+    captured: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.name == "namespace_target":
+                captured.append(record)
+
+    target_logger = logging.getLogger("namespace_target")
+    target_logger.setLevel(logging.INFO)
+    handler = _Capture()
+    target_logger.addHandler(handler)
+    try:
+        async with RuntimeClient(base_url) as c:
+            await c.remote(emit_log_line, "custom context", "INFO")
+            record = next((r for r in captured if r.getMessage() == "custom context"), None)
+            assert record is not None
+            context = getattr(record, LOG_CONTEXT_ATTR, "")
+            assert context.startswith("custom-worker-")
+    finally:
+        target_logger.removeHandler(handler)
