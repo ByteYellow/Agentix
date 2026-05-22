@@ -14,8 +14,6 @@ dependencies = [
     "agentix-deployment-docker"
 ]
 
-# Standalone project (see [tool.uv.workspace].exclude in the repo root)
-# — path-depends on the monorepo, editable, no release step.
 [tool.uv.sources]
 agentixx = { path = "../..", editable = true }
 agentix-runtime-basic = { path = "../../plugins/runtime-basic", editable = true }
@@ -24,6 +22,7 @@ agentix-deployment-docker = { path = "../../plugins/deployments/docker", editabl
 [tool.agentix]
 nix = "default.nix"
 
-# Keep root-level main.py importable in the built bundle.
+# Hatchling cannot infer root-level main.py from the project name, so
+# include it explicitly in the wheel that agentix build installs.
 [tool.hatch.build.targets.wheel]
 only-include = ["main.py"]
