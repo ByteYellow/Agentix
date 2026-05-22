@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hello-world"
+version = "0.1.0"
+description = "Hello-Wolrd Example"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "agentixx",
+    "agentix-runtime-basic",
+    "agentix-deployment-docker"
+]
+
+[tool.uv.sources]
+agentixx = { path = "../..", editable = true }
+agentix-runtime-basic = { path = "../../plugins/runtime-basic", editable = true }
+agentix-deployment-docker = { path = "../../plugins/deployments/docker", editable = true }
+
+[tool.agentix]
+nix = "default.nix"
+
+# Hatchling cannot infer root-level main.py from the project name, so
+# include it explicitly in the wheel that agentix build installs.
+[tool.hatch.build.targets.wheel]
+only-include = ["main.py"]

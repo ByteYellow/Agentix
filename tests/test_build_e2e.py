@@ -16,7 +16,7 @@ What it proves end to end:
   * the interpreter is Nix-provided (`/nix/store`), not a stray host
     Python — the property that makes the bundle libc-hermetic
   * the project's remote target imports and runs
-  * a plugin's system closure (`agentix-runtime-basic` → bash) is
+  * plugin and project system closures (`bash` and `ripgrep`) are
     merged into `/nix/runtime`
   * the `agentix-server` entry point is wired
 """
@@ -40,7 +40,7 @@ pytestmark = [
 ]
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_EXAMPLE = _REPO_ROOT / "examples" / "hello-bundle"
+_EXAMPLE = _REPO_ROOT / "examples" / "hello-world"
 _IMAGE = "agentix-build-e2e:pytest"
 _SELECTED_PLATFORM = "AGENTIX_E2E_PLATFORM"
 
@@ -93,7 +93,7 @@ def _supports_platform(supported: set[str], platform: str) -> bool:
 
 @pytest.fixture(scope="module")
 def bundle() -> Iterator[str]:
-    """Build `examples/hello-bundle` into a bundle image once."""
+    """Build `examples/hello-world` into a bundle image once."""
     build = subprocess.run(
         [sys.executable, "-m", "agentix.cli", "build", str(_EXAMPLE), "--name", _IMAGE],
         capture_output=True,
@@ -135,15 +135,17 @@ def test_remote_target_importable(bundle: str) -> None:
     out = _sh(
         bundle,
         "/nix/runtime/venv/bin/python -c "
-        "'import hello_bundle, agentix, agentix.bash; print(hello_bundle.run())'",
+        "'import main, agentix, agentix.bash; "
+        "print(main.run()); print(main.ripgrep_version())'",
     )
     assert "hello, world" in out
+    assert "ripgrep" in out
 
 
-def test_plugin_closure_merged(bundle: str) -> None:
-    """`agentix-runtime-basic` ships a bash system closure; it must be
-    merged into `/nix/runtime` via the discovered `agentix.nix` file."""
+def test_system_closures_merged(bundle: str) -> None:
+    """Plugin and project system closures must be merged into `/nix/runtime`."""
     assert "ok" in _sh(bundle, "test -x /nix/runtime/bin/bash && echo ok")
+    assert "ripgrep" in _sh(bundle, "/nix/runtime/bin/rg --version")
 
 
 def test_entrypoint_wired(bundle: str) -> None:
@@ -182,10 +184,12 @@ def test_platform_bundle_builds_and_runs(platform: str, machine: str) -> None:
             "uname -m; "
             "test -d /nix/runtime/venv; "
             "test -x /nix/runtime/bin/bash; "
+            "test -x /nix/runtime/bin/rg; "
             "readlink -f /nix/runtime/venv/bin/python; "
             "/nix/runtime/venv/bin/python --version; "
             "/nix/runtime/venv/bin/python -c "
-            "'import agentix, hello_bundle, agentix.bash; print(hello_bundle.run())'; "
+            "'import agentix, main, agentix.bash; "
+            "print(main.run()); print(main.ripgrep_version())'; "
             "/nix/runtime/venv/bin/agentix-server --help",
         )
         lines = [line.strip() for line in out.splitlines() if line.strip()]
@@ -193,6 +197,7 @@ def test_platform_bundle_builds_and_runs(platform: str, machine: str) -> None:
         assert any(line.startswith("/nix/store/") for line in lines)
         assert "Python 3.11" in out
         assert "hello, world" in out
+        assert "ripgrep" in out
         assert "agentix-server" in out
     finally:
         subprocess.run(["docker", "rmi", "-f", image, f"{name}:latest"], capture_output=True)
