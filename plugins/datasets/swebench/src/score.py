@@ -7,8 +7,6 @@ import shutil
 from pathlib import Path
 from typing import Any, cast
 
-from unidiff import PatchSet
-
 from swebench.harness.constants import (
     FAIL_ONLY_REPOS,
     FAIL_TO_PASS,
@@ -23,6 +21,7 @@ from swebench.harness.log_parsers.python import parse_log_pytest_v2
 from swebench.harness.run_evaluation import GIT_APPLY_CMDS
 from swebench.harness.test_spec.python import get_test_directives
 from swebench.harness.test_spec.test_spec import make_test_spec
+from unidiff import PatchSet
 
 from .env import prepare_env
 
