@@ -1,19 +1,14 @@
-"""Sandbox-side: SWE-bench Verified primitives.
+"""Sandbox-side: SWE-bench Verified dataset primitives.
 
-Three remote-call entry points, mirroring the flow in
-`swebench.harness.run_evaluation.run_instance` (L151+):
+Two remote-call entry points, mirroring the SWE-bench eval contract:
 
-    1. `swe.clean(workdir, base_commit)`
+    1. `swe.prepare_env(workdir, base_commit)`
        Reset `/testbed` to `base_commit`, drop any extra commits, wipe
        the working tree. Run before `cc.run` so the model starts from a
        known state regardless of what the prebuilt image happened to
        ship at HEAD.
 
-    2. `swe.get_patch(workdir)`
-       Capture the model's diff against `base_commit` — staged adds +
-       working-tree edits — as a single unified diff string.
-
-    3. `swe.eval(instance, patch)`
+    2. `swe.score(instance, patch)`
        Reproduce the SWE-bench scoring contract without executing the
        generated `test_spec.eval_script`:
          (a) write `patch` to `/tmp/patch.diff`, try the GIT_APPLY_CMDS
@@ -26,9 +21,10 @@ Three remote-call entry points, mirroring the flow in
        Returns `{resolved, patch_applied, tests_status}`.
 
 The intended host flow is two sandboxes per instance: one for the cc
-agent (clean → cc.run → get_patch), tear down, then a fresh sandbox
-for swe.eval. Both sandboxes use the per-instance SWE-bench eval
-image (`swebench/sweb.eval.x86_64.<id>:latest`) as the base.
+agent (`prepare_env` → agent → generic patch capture), tear down, then
+a fresh sandbox for `score`. Both sandboxes use the per-instance
+SWE-bench eval image (`swebench/sweb.eval.x86_64.<id>:latest`) as the
+base.
 """
 
 from __future__ import annotations
@@ -41,7 +37,7 @@ import shlex
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 WORKROOT = Path(os.environ.get("AGENTIX_UPLOAD_ROOT", "/tmp")) / ".cache" / "swebench-eval"
 TESTBED = "/testbed"
@@ -118,14 +114,14 @@ if HTTPAdapter is not None and not getattr(HTTPAdapter, "_agentix_httpbin_retry"
 
 
 @dataclass
-class CleanResult:
+class PrepareEnvResult:
     ok: bool
     head: str
     log: str
 
 
 @dataclass
-class EvalResult:
+class ScoreResult:
     resolved: bool
     patch_applied: bool
     apply_cmd: str | None
@@ -146,7 +142,7 @@ class EvalPlan:
     test_files: list[str]
 
 
-async def clean(workdir: str = TESTBED, base_commit: str | None = None) -> CleanResult:
+async def prepare_env(workdir: str = TESTBED, base_commit: str | None = None) -> PrepareEnvResult:
     """Reset `workdir` to `base_commit` and drop everything else.
 
     Mirrors SWE-bench's expectation that /testbed enters the eval at
@@ -171,40 +167,21 @@ async def clean(workdir: str = TESTBED, base_commit: str | None = None) -> Clean
     out, _ = await proc.communicate()
     text = out.decode(errors="replace")
     head = text.strip().splitlines()[-1] if proc.returncode == 0 else ""
-    return CleanResult(ok=proc.returncode == 0, head=head, log=text)
+    return PrepareEnvResult(ok=proc.returncode == 0, head=head, log=text)
 
 
-async def get_patch(workdir: str = TESTBED) -> str:
-    """Return all `workdir` changes (including new files) as a unified diff.
-
-    `git add -A` first so untracked files appear in `--cached`; this
-    keeps parity with SWE-bench's expected prediction format.
-    """
-    proc = await asyncio.create_subprocess_shell(
-        (
-            f"cd {workdir} && "
-            "git -c core.fileMode=false add -A && "
-            "git -c core.fileMode=false diff --cached --no-color --binary"
-        ),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    out, _ = await proc.communicate()
-    return out.decode(errors="replace") if proc.returncode == 0 else ""
-
-
-async def eval(
+async def score(
     *,
     instance: dict[str, Any],
     patch: str,
     workdir: str = TESTBED,
     apply_timeout: float = 120,
     eval_timeout: float = 1800,
-) -> EvalResult:
+) -> ScoreResult:
     """Apply `patch` in `workdir`, run targeted SWE-bench tests, grade."""
     from swebench.harness.test_spec.test_spec import make_test_spec
 
-    spec = make_test_spec(instance)
+    spec = make_test_spec(cast(Any, instance))
     workroot = WORKROOT / spec.instance_id
     if workroot.exists():
         shutil.rmtree(workroot)
@@ -274,7 +251,7 @@ async def eval(
     ftp = tests.get("FAIL_TO_PASS", {"success": [], "failure": []})
     ptp = tests.get("PASS_TO_PASS", {"success": [], "failure": []})
 
-    return EvalResult(
+    return ScoreResult(
         resolved=bool(entry.get("resolved", False)),
         patch_applied=bool(entry.get("patch_successfully_applied", False)),
         apply_cmd=applied_with,
@@ -1044,4 +1021,4 @@ async def _cleanup_untracked_paths(
 
 
 
-__all__ = ["clean", "get_patch", "eval", "CleanResult", "EvalResult"]
+__all__ = ["prepare_env", "score", "PrepareEnvResult", "ScoreResult"]

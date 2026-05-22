@@ -3,13 +3,13 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
-EVAL_CC_SWE = ROOT / "examples" / "eval-cc-swe"
-sys.path.insert(0, str(EVAL_CC_SWE))
+SWE_PLUGIN = ROOT / "plugins" / "datasets" / "swe"
+sys.path.insert(0, str(SWE_PLUGIN))
 
-import swe  # noqa: E402
+import agentix.datasets.swe as swe  # noqa: E402
 
 
 def test_new_file_only_test_patch_reset_preserves_setup_commit() -> None:
@@ -243,3 +243,99 @@ def test_requests_httpbin_retry_shim_does_not_duplicate_pythonpath(tmp_path: Pat
 
     shim_dir = str(tmp_path / "requests-httpbin-retry")
     assert env["PYTHONPATH"].split(os.pathsep) == [shim_dir]
+
+
+def test_requests_httpbin_retry_shim_retries_only_transient_httpbin_statuses(monkeypatch) -> None:
+    responses = [_FakeResponse(502), _FakeResponse(503), _FakeResponse(200)]
+    queued_responses = list(responses)
+    calls: list[str] = []
+
+    def send(self, request, **kwargs):
+        calls.append(request.url)
+        return queued_responses.pop(0)
+
+    adapter_cls = _exec_requests_httpbin_retry_shim(monkeypatch, send)
+
+    response = adapter_cls().send(SimpleNamespace(url="https://httpbin.org/post"))
+
+    assert response.status_code == 200
+    assert calls == ["https://httpbin.org/post"] * 3
+    assert responses[0].closed is True
+    assert responses[1].closed is True
+    assert responses[2].closed is False
+
+
+def test_requests_httpbin_retry_shim_does_not_retry_asserted_or_other_hosts(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def send(self, request, **kwargs):
+        calls.append(request.url)
+        return _FakeResponse(401 if "httpbin.org" in request.url else 502)
+
+    adapter_cls = _exec_requests_httpbin_retry_shim(monkeypatch, send)
+
+    asserted = adapter_cls().send(SimpleNamespace(url="https://httpbin.org/status/401"))
+    other_host = adapter_cls().send(SimpleNamespace(url="https://example.com/status/502"))
+
+    assert asserted.status_code == 401
+    assert other_host.status_code == 502
+    assert calls == ["https://httpbin.org/status/401", "https://example.com/status/502"]
+
+
+def test_requests_httpbin_retry_shim_retries_httpbin_connection_errors(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def send(self, request, **kwargs):
+        calls.append(request.url)
+        if len(calls) == 1:
+            raise _FakeConnectionError("temporary disconnect")
+        return _FakeResponse(200)
+
+    adapter_cls = _exec_requests_httpbin_retry_shim(monkeypatch, send)
+
+    response = adapter_cls().send(SimpleNamespace(url="https://httpbin.org/get"))
+
+    assert response.status_code == 200
+    assert calls == ["https://httpbin.org/get", "https://httpbin.org/get"]
+
+
+class _FakeConnectionError(Exception):
+    pass
+
+
+class _FakeTimeout(Exception):
+    pass
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _exec_requests_httpbin_retry_shim(monkeypatch, send):
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    class FakeHTTPAdapter:
+        pass
+
+    FakeHTTPAdapter.send = send
+
+    requests_module = ModuleType("requests")
+    adapters_module = ModuleType("requests.adapters")
+    exceptions_module = ModuleType("requests.exceptions")
+    adapters_module.HTTPAdapter = FakeHTTPAdapter
+    exceptions_module.ConnectionError = _FakeConnectionError
+    exceptions_module.Timeout = _FakeTimeout
+    requests_module.adapters = adapters_module
+    requests_module.exceptions = exceptions_module
+
+    monkeypatch.setitem(sys.modules, "requests", requests_module)
+    monkeypatch.setitem(sys.modules, "requests.adapters", adapters_module)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", exceptions_module)
+
+    exec(swe.REQUESTS_HTTPBIN_RETRY_SHIM, {})
+    return FakeHTTPAdapter

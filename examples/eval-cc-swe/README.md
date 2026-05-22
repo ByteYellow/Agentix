@@ -10,12 +10,19 @@ on the host through `agentix.trace` and feed abridge for rollout logs.
 ```
 examples/eval-cc-swe/
 ├── pyproject.toml     — project + deps
-├── default.nix        — claude CLI + git (Nix-pinned)
 ├── README.md
-├── cc.py              — sandbox: `cc.run(...)` — spawns the proxy + runs claude
-├── proxy.py           — sandbox: Anthropic↔OpenAI proxy used by cc.py
-├── swe.py             — sandbox: `swe.clean`, `swe.get_patch`, `swe.eval`
+├── git_patch.py       — sandbox: generic `get_patch(...)`
 └── runner.py          — host: orchestrator + abridge wiring
+
+plugins/agents/claude-code/
+└── agentix/agents/claude_code/
+    ├── __init__.py    — sandbox: `claude_code.run(...)`
+    └── default.nix    — Claude Code CLI
+
+plugins/datasets/swe/
+└── agentix/datasets/swe/
+    ├── __init__.py    — sandbox: `swe.prepare_env`, `swe.score`
+    └── default.nix    — git/patch/libstdc++ for SWE-bench images
 ```
 
 ## Architecture
@@ -25,25 +32,27 @@ examples/eval-cc-swe/
    ┌────────────────────────────┐         ┌────────────────────────────────────┐
    │ python -m runner           │         │  base: sweb.eval.x86_64.<id>:latest│
    │                            │         │  overlay: eval-cc-swe:<ver>        │
-   │ # agent sandbox            │  ─────► │    swe.clean(/testbed, base)       │
-   │   c.remote(swe.clean,…)    │         │    cc.run(...)                     │
-   │   c.remote(cc.run,…)       │         │      ↳ proxy on 127.0.0.1:<port>   │
-   │   c.remote(swe.get_patch,…)│         │      ↳ claude --print … via proxy  │
-   │   c.traces() → abridge     │ ◄────── │      ↳ proxy emits llm_request/    │
-   │   c.attach_logging(…)      │ ◄────── │        llm_response via trace.emit │
-   │                            │         │    swe.get_patch(/testbed)         │
+   │ # client1 / agent sandbox  │  ─────► │    agentix.datasets.swe.prepare_env│
+   │   c.remote(swe.prepare_env)│         │    agentix.agents.claude_code.run  │
+   │   c.remote(cc.run,…)       │         │      ↳ claude --print via abridge  │
+   │   c.remote(get_patch,…)    │         │    git_patch.get_patch             │
+   │   c.traces() → abridge     │ ◄────── │                                    │
+   │   c.attach_logging(…)      │ ◄────── │                                    │
    │                            │         └────────────────────────────────────┘
-   │ # eval sandbox (fresh)     │         ┌────────────────────────────────────┐
-   │   c.remote(swe.eval,…)     │  ─────► │  same base + overlay; new container│
+   │ # client2 / score sandbox  │         ┌────────────────────────────────────┐
+   │   c.remote(swe.prepare_env)│  ─────► │  same base + overlay; new container│
+   │   c.remote(swe.score,…)    │         │    reset to base_commit            │
    └────────────────────────────┘         │    apply patch (GIT_APPLY_CMDS)    │
-                                          │    bash /eval.sh                   │
-                                          │    get_eval_report                 │
+                                          │    apply SWE test patch            │
+                                          │    run targeted tests + score      │
                                           └────────────────────────────────────┘
 ```
 
-Routing is by `fn.__module__`: `cc.run` lands on a worker for module
-`cc`, `swe.eval` on a worker for `swe`. The framework auto-registers
-each module on first dispatch — no entry-point declaration needed.
+Routing is by `fn.__module__`: `agentix.agents.claude_code.run`,
+`agentix.datasets.swe.prepare_env`, `agentix.datasets.swe.score`, and
+the example-local `git_patch.get_patch` land on workers for those
+modules. The framework auto-registers each module on first dispatch —
+no entry-point declaration needed.
 
 ### Trace flow
 
@@ -51,13 +60,12 @@ each module on first dispatch — no entry-point declaration needed.
    stream into `abridge.correlate`. Each instance's rollout file
    lands at `runs/<id>.rollouts.jsonl`.
 2. `runner` also calls `client.attach_logging("agentix.sandbox")`, so
-   any `logger.info(...)` inside `cc.run` / `swe.*` / `proxy.py` shows
+   any `logger.info(...)` inside `claude_code.run` / `swe.*` shows
    up in the host's logging stream — no extra plumbing on the user's
    side. Worker boot installs the bridge automatically.
-3. Inside the sandbox, `cc.run` sets the trace `call_id` on the
-   contextvar before launching the proxy + claude. Every
-   `trace.emit(...)` from the proxy inherits that key, so abridge
-   correlates an entire round of LLM round-trips into one `Rollout`.
+3. Inside the sandbox, `claude_code.run` points Claude Code at the
+   Anthropic-compatible abridge service, so abridge correlates LLM
+   round-trips into one `Rollout`.
 
 The trace backlog is replayed from cursor 0 on each `client.traces()`
 subscription — there is no buffering / drop tradeoff.
@@ -78,20 +86,19 @@ official harness flow.
   SWE-bench project — already contains the `testbed` conda env and
   `/testbed` cloned at `base_commit`. Runner constructs the tag from
   the instance row (the lowercase id with `__` rewritten to `_1776_`).
-- **Runtime image** (`SandboxConfig.runtime_image`): the bundle this
-  directory produces. Brings in `claude`, `git`, the in-sandbox
-  proxy, the `agentix-server` worker, and the `swebench` Python
-  package, all under `/nix/runtime`.
+- **Bundle image** (`SandboxConfig.bundle`): the bundle this
+  directory produces. Brings in `claude`, `git`, `agentix-server`, the
+  Claude Code agent plugin, and the SWE dataset plugin, all under
+  `/nix/runtime`.
 
 ## Install, build, run
 
 ```bash
-# host-side: enables `from cc import run`, `from swe import …`,
-# and `from runner import main` for typed dispatch
-pip install -e .
+# host-side: installs the example plus local agent/dataset plugins
+uv sync
 
 # package the project + every declared dep into one image
-agentix build . -o eval-cc-swe:0.1.0
+uv run agentix build . --name eval-cc-swe:0.2.0
 
 # (optional) pre-pull the SWE-bench eval images you plan to score
 docker pull swebench/sweb.eval.x86_64.django_1776_django-11099:latest
@@ -99,27 +106,29 @@ docker pull swebench/sweb.eval.x86_64.django_1776_django-11099:latest
 # Point at any OpenAI-compatible backend
 export OPENAI_BASE_URL=https://api.openai.com/v1
 export OPENAI_API_KEY=sk-...
-export OPENAI_MODEL=gpt-4o-mini
+export UPSTREAM_MODEL=gpt-4o-mini
 
 python -m runner --limit 5
 # or specific instances:
 python -m runner --instance-id django__django-11099 --instance-id sympy__sympy-20212
 
-# CI-only ground-truth check: exits on the first unresolved instance.
-python -m ci_runner --num-shards 20 --shard-index 0 --out runs/ground-truth-shard-0
+# Ground-truth check: skips client1 and scores dataset patches directly.
+uv run python -m runner --ground-truth --fail-on-unresolved \
+  --num-shards 20 --shard-index 0 --out runs/ground-truth-shard-0
 ```
 
 Runner flags (all optional unless noted):
 
-- `--bundle-image`        runtime bundle to overlay (default `eval-cc-swe:0.1.0`)
+- `--bundle`        runtime bundle to overlay (default `eval-cc-swe:0.2.0`)
 - `--swebench-namespace`  docker namespace for the eval images (default `swebench`)
 - `--swebench-tag`        tag on those images (default `latest`)
 - `--arch`                `x86_64` or `arm64`
 - `--openai-base-url`     OpenAI-compatible endpoint (env `OPENAI_BASE_URL`)
 - `--openai-api-key`      bearer token for that endpoint (env `OPENAI_API_KEY`, required)
-- `--openai-model`        model name the proxy forwards each request as (env `OPENAI_MODEL`)
+- `--upstream-model`      model name the proxy forwards each request as (env `UPSTREAM_MODEL`)
+- `--response-model`      model name echoed to Claude Code (env `RESPONSE_MODEL`)
 - `--cc-timeout`          wall-clock budget for claude (default 1800s)
-- `--eval-timeout`        wall-clock budget for the eval script (default 1800s)
+- `--eval-timeout`        wall-clock budget for SWE test scoring (default 1800s)
 - `--max-turns`           forwarded to the claude CLI
 - `--out`                 directory for per-instance `.patch`, `.json`, `.rollouts.jsonl`
 

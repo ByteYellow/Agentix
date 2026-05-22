@@ -4,13 +4,14 @@ Per instance, two sandboxes back-to-back:
 
     1. Agent sandbox (base = `swebench/sweb.eval.x86_64.<id>:latest`)
          - register `agentix.bridge.anthropic.OpenAIGateway` on the host RuntimeClient
-         - c.remote(swe.clean, /testbed, base_commit)
+         - c.remote(agentix.datasets.swe.prepare_env, /testbed, base_commit)
          - c.remote(agentix.bridge.anthropic.start_service, ...)
-         - c.remote(cc.run, ..., anthropic_base_url=svc.url)
-         - c.remote(swe.get_patch, /testbed)
+         - c.remote(agentix.agents.claude_code.run, ..., anthropic_base_url=svc.url)
+         - c.remote(git_patch.get_patch, /testbed)
 
     2. Eval sandbox (fresh container, no LLM gateway)
-         - c.remote(swe.eval, instance=..., patch=...)
+         - c.remote(agentix.datasets.swe.prepare_env, /testbed, base_commit)
+         - c.remote(agentix.datasets.swe.score, instance=..., patch=...)
 
 Host wires an `openai.AsyncOpenAI` client into `AnthropicGateway` so
 the actual provider call (model-eval, OpenRouter, etc.) lives on the
@@ -31,9 +32,10 @@ import sys
 import time
 from pathlib import Path
 
+import agentix.agents.claude_code as cc
 import agentix.bridge.anthropic
-import cc
-import swe
+import agentix.datasets.swe as swe
+import git_patch
 from agentix.deployment.docker import DockerDeployment
 from datasets import load_dataset
 from openai import AsyncOpenAI
@@ -59,14 +61,14 @@ def _instance_image(instance: dict, *, namespace: str, tag: str, arch: str) -> s
     return image
 
 
-def _make_openai_client(*, base_url: str, api_key: str) -> AsyncOpenAI:
-    return AsyncOpenAI(base_url=base_url, api_key=api_key)
-
-
-def load_instances_dataset(dataset: str, *, split: str, dataset_file: str | None = None):
+def _load_instances_dataset(dataset: str, *, split: str, dataset_file: str | None = None):
     if dataset_file:
         return load_dataset(dataset, data_files=dataset_file, split=split)
     return load_dataset(dataset, split=split)
+
+
+def _make_openai_client(*, base_url: str, api_key: str) -> AsyncOpenAI:
+    return AsyncOpenAI(base_url=base_url, api_key=api_key)
 
 
 async def _run_agent_phase(
@@ -80,7 +82,7 @@ async def _run_agent_phase(
     cc_timeout: float,
     max_turns: int | None,
 ) -> dict:
-    """Spin the agent sandbox: clean → start abridge → cc.run → get_patch."""
+    """Spin the agent sandbox: prepare env → start abridge → cc.run → get patch."""
     iid = inst["instance_id"]
 
     gateway = agentix.bridge.anthropic.OpenAIGateway(
@@ -92,15 +94,15 @@ async def _run_agent_phase(
         client = RuntimeClient(sandbox.runtime_url)
         client.register_namespace(gateway)
         async with client as c:
-            cleaned = await c.remote(
-                swe.clean,
+            prepared = await c.remote(
+                swe.prepare_env,
                 workdir=WORKDIR,
                 base_commit=inst["base_commit"],
             )
-            if not cleaned.ok:
-                print(f"[{iid}] clean failed:\n{cleaned.log[-500:]}")
-                return {"instance_id": iid, "skipped": "clean_failed"}
-            print(f"[{iid}] HEAD={cleaned.head[:12]}")
+            if not prepared.ok:
+                print(f"[{iid}] prepare-env failed:\n{prepared.log[-500:]}")
+                return {"instance_id": iid, "skipped": "prepare_env_failed"}
+            print(f"[{iid}] HEAD={prepared.head[:12]}")
 
             svc = await c.remote(
                 agentix.bridge.anthropic.start_service,
@@ -122,7 +124,7 @@ async def _run_agent_phase(
             if cc_res.stderr_tail:
                 print(f"[{iid}] stderr_tail:\n{cc_res.stderr_tail.rstrip()}")
 
-            patch = await c.remote(swe.get_patch, workdir=WORKDIR)
+            patch = await c.remote(git_patch.get_patch, workdir=WORKDIR)
             try:
                 await c.remote(agentix.bridge.anthropic.stop_service, handle=svc)
             except Exception:
@@ -131,27 +133,12 @@ async def _run_agent_phase(
     return {"instance_id": iid, "patch": patch, "claude_exit": cc_res.exit_code}
 
 
-async def _run_eval_phase(
+async def _score_patch(
     inst: dict,
     *,
-    cfg: SandboxConfig,
     patch: str,
-    eval_timeout: float,
-) -> swe.EvalResult:
-    async with session(DockerDeployment(), cfg) as sandbox:
-        async with RuntimeClient(sandbox.runtime_url) as c:
-            return await c.remote(
-                swe.eval,
-                instance=inst,
-                patch=patch,
-                eval_timeout=eval_timeout,
-            )
-
-
-async def evaluate_ground_truth_one(
-    inst: dict,
-    *,
-    bundle_image: str,
+    mode: str,
+    bundle: str,
     swebench_namespace: str,
     swebench_tag: str,
     arch: str,
@@ -159,8 +146,8 @@ async def evaluate_ground_truth_one(
     eval_timeout: float,
     out_dir: Path,
 ) -> dict:
+    """Run client2: prepare a fresh SWE image and score `patch`."""
     iid = inst["instance_id"]
-    patch = inst.get("patch") or ""
     base_image = _instance_image(
         inst,
         namespace=swebench_namespace,
@@ -170,26 +157,45 @@ async def evaluate_ground_truth_one(
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{iid}.patch").write_text(patch)
     if not patch.strip():
-        summary = {"instance_id": iid, "skipped": "empty_ground_truth_patch"}
+        summary = {"instance_id": iid, "mode": mode, "skipped": "empty_patch"}
         (out_dir / f"{iid}.json").write_text(json.dumps(summary, indent=2))
         return summary
 
-    cfg = SandboxConfig(image=base_image, runtime_image=bundle_image, platform=docker_platform)
+    cfg = SandboxConfig(image=base_image, bundle=bundle, platform=docker_platform)
     started = time.time()
-    print(f"[{iid}] ground-truth eval sandbox: {base_image}")
+    print(f"[{iid}] score sandbox: {base_image}")
     print(f"[{iid}] patch_bytes={len(patch)}")
-    ev = await _run_eval_phase(
-        inst,
-        cfg=cfg,
-        patch=patch,
-        eval_timeout=eval_timeout,
-    )
+    async with session(DockerDeployment(), cfg) as sandbox:
+        async with RuntimeClient(sandbox.runtime_url) as c:
+            prepared = await c.remote(
+                swe.prepare_env,
+                workdir=WORKDIR,
+                base_commit=inst["base_commit"],
+            )
+            if not prepared.ok:
+                summary = {
+                    "instance_id": iid,
+                    "mode": mode,
+                    "skipped": "prepare_env_failed",
+                    "prepare_env_log": prepared.log,
+                    "duration_s": round(time.time() - started, 1),
+                }
+                (out_dir / f"{iid}.json").write_text(json.dumps(summary, indent=2))
+                return summary
+
+            ev = await c.remote(
+                swe.score,
+                instance=inst,
+                patch=patch,
+                eval_timeout=eval_timeout,
+            )
+
     (out_dir / f"{iid}.apply.log").write_text(ev.apply_log)
     (out_dir / f"{iid}.test.log").write_text(ev.test_log)
 
     summary = {
         "instance_id": iid,
-        "mode": "ground_truth",
+        "mode": mode,
         "resolved": ev.resolved,
         "patch_applied": ev.patch_applied,
         "apply_cmd": ev.apply_cmd,
@@ -215,7 +221,7 @@ async def evaluate_ground_truth_one(
 async def solve_one(
     inst: dict,
     *,
-    bundle_image: str,
+    bundle: str,
     swebench_namespace: str,
     swebench_tag: str,
     arch: str,
@@ -237,10 +243,9 @@ async def solve_one(
         arch=arch,
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = SandboxConfig(image=base_image, runtime_image=bundle_image, platform=docker_platform)
+    cfg = SandboxConfig(image=base_image, bundle=bundle, platform=docker_platform)
 
     print(f"[{iid}] agent sandbox: {base_image}")
-    started = time.time()
     agent = await _run_agent_phase(
         inst,
         cfg=cfg,
@@ -255,43 +260,18 @@ async def solve_one(
         return agent
 
     patch: str = agent["patch"]
-    (out_dir / f"{iid}.patch").write_text(patch)
-    print(f"[{iid}] patch_bytes={len(patch)}")
-    if not patch.strip():
-        return {"instance_id": iid, "skipped": "empty_patch"}
-
-    print(f"[{iid}] eval sandbox")
-    ev = await _run_eval_phase(
+    return await _score_patch(
         inst,
-        cfg=cfg,
         patch=patch,
+        mode="agent",
+        bundle=bundle,
+        swebench_namespace=swebench_namespace,
+        swebench_tag=swebench_tag,
+        arch=arch,
+        docker_platform=docker_platform,
         eval_timeout=eval_timeout,
+        out_dir=out_dir,
     )
-    (out_dir / f"{iid}.apply.log").write_text(ev.apply_log)
-    (out_dir / f"{iid}.test.log").write_text(ev.test_log)
-
-    summary = {
-        "instance_id": iid,
-        "resolved": ev.resolved,
-        "patch_applied": ev.patch_applied,
-        "apply_cmd": ev.apply_cmd,
-        "known_fixes": ev.known_fixes,
-        "fail_to_pass": ev.fail_to_pass,
-        "pass_to_pass": ev.pass_to_pass,
-        "duration_s": round(time.time() - started, 1),
-    }
-    (out_dir / f"{iid}.json").write_text(json.dumps(summary, indent=2))
-
-    verdict = "PASS" if ev.resolved else "FAIL"
-    ftp_ok = len(ev.fail_to_pass.get("success", []))
-    ftp_n = ftp_ok + len(ev.fail_to_pass.get("failure", []))
-    print(
-        f"[{iid}] {verdict}  patch_applied={ev.patch_applied}  "
-        f"resolved={ftp_ok}/{ftp_n}  "
-        f"regressions={len(ev.pass_to_pass.get('failure', []))}  "
-        f"({summary['duration_s']}s)"
-    )
-    return summary
 
 
 def _selected_instances(
@@ -332,7 +312,7 @@ def _should_fail(summary: dict) -> bool:
 
 async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--bundle-image", default="eval-cc-swe:0.2.0")
+    parser.add_argument("--bundle", default="eval-cc-swe:0.2.0")
     parser.add_argument("--swebench-namespace", default="swebench")
     parser.add_argument("--swebench-tag", default="latest")
     parser.add_argument("--arch", default="x86_64", choices=["x86_64", "arm64"])
@@ -403,7 +383,7 @@ async def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s [%(name)s] %(message)s",
     )
 
-    ds = load_instances_dataset(args.dataset, split=args.split, dataset_file=args.dataset_file)
+    ds = _load_instances_dataset(args.dataset, split=args.split, dataset_file=args.dataset_file)
     instances = _selected_instances(
         ds,
         instance_ids=args.instance_id,
@@ -426,9 +406,11 @@ async def main(argv: list[str] | None = None) -> int:
         iid = inst["instance_id"]
         try:
             if args.ground_truth:
-                s = await evaluate_ground_truth_one(
+                s = await _score_patch(
                     inst,
-                    bundle_image=args.bundle_image,
+                    patch=inst.get("patch") or "",
+                    mode="ground_truth",
+                    bundle=args.bundle,
                     swebench_namespace=args.swebench_namespace,
                     swebench_tag=args.swebench_tag,
                     arch=args.arch,
@@ -439,7 +421,7 @@ async def main(argv: list[str] | None = None) -> int:
             else:
                 s = await solve_one(
                     inst,
-                    bundle_image=args.bundle_image,
+                    bundle=args.bundle,
                     swebench_namespace=args.swebench_namespace,
                     swebench_tag=args.swebench_tag,
                     arch=args.arch,

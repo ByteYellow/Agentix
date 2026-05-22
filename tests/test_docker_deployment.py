@@ -38,7 +38,7 @@ async def test_create_passes_platform_to_carrier_and_sandbox(monkeypatch: pytest
     await deployment.create(
         SandboxConfig(
             image="python:3.13-slim",
-            runtime_image="bundle:pytest",
+            bundle="bundle:pytest",
             platform="linux/amd64",
         )
     )
