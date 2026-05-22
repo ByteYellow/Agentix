@@ -114,13 +114,6 @@ if HTTPAdapter is not None and not getattr(HTTPAdapter, "_agentix_httpbin_retry"
 
 
 @dataclass
-class PrepareEnvResult:
-    ok: bool
-    head: str
-    log: str
-
-
-@dataclass
 class ScoreResult:
     resolved: bool
     patch_applied: bool
@@ -141,33 +134,6 @@ class EvalPlan:
     test_cmd: str
     test_files: list[str]
 
-
-async def prepare_env(workdir: str = TESTBED, base_commit: str | None = None) -> PrepareEnvResult:
-    """Reset `workdir` to `base_commit` and drop everything else.
-
-    Mirrors SWE-bench's expectation that /testbed enters the eval at
-    exactly base_commit with a clean working tree.
-    """
-    parts = [
-        f"cd {workdir}",
-        "git -c core.fileMode=false update-index --refresh >/dev/null 2>&1 || true",
-    ]
-    if base_commit:
-        parts.append(f"git reset --hard {base_commit}")
-    else:
-        parts.append("git reset --hard HEAD")
-    parts.append("git clean -fdx")
-    parts.append("git rev-parse HEAD")
-
-    proc = await asyncio.create_subprocess_shell(
-        " && ".join(parts),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    out, _ = await proc.communicate()
-    text = out.decode(errors="replace")
-    head = text.strip().splitlines()[-1] if proc.returncode == 0 else ""
-    return PrepareEnvResult(ok=proc.returncode == 0, head=head, log=text)
 
 
 async def score(
@@ -1021,4 +987,4 @@ async def _cleanup_untracked_paths(
 
 
 
-__all__ = ["prepare_env", "score", "PrepareEnvResult", "ScoreResult"]
+__all__ = ["score", "ScoreResult"]

@@ -12,13 +12,15 @@ dependencies = [
 agentixx = { workspace = true }
 
 [build-system]
-requires = ["uv_build>=0.7,<0.9"]
-build-backend = "uv_build"
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
-[tool.uv.build-backend]
-module-name = "agentix.plugins.datasets.swe"
-module-root = ""
-namespace = true
+[tool.setuptools]
+package-dir = { "agentix.plugins.datasets.swe" = "src" }
+packages = ["agentix.plugins.datasets.swe"]
+
+[tool.setuptools.package-data]
+"agentix.plugins.datasets.swe" = ["default.nix"]
 
 [project.entry-points."agentix.nix"]
 swe = "agentix.plugins.datasets.swe"

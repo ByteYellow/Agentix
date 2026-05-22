@@ -1,9 +1,7 @@
 """SWE-bench dataset plugin exports."""
 
-from .swe import (
-    prepare_env,
-    score,
-)
+from .env import prepare_env
+from .score import score
 
 __all__ = [
     "prepare_env",

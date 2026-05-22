@@ -55,7 +55,7 @@ requires-dist = [
 [[package]]
 name = "agentix-dataset-swe"
 version = "0.1.0"
-source = { editable = "plugins/datasets/swe" }
+source = { editable = "plugins/datasets/swebench" }
 dependencies = [
     { name = "agentixx" },
     { name = "swebench" },

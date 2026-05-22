@@ -19,11 +19,13 @@ plugins/agents/claude-code/
     ├── __init__.py    — sandbox: `claude_code.run(...)`
     └── default.nix    — Claude Code CLI
 
-plugins/datasets/swe/
-└── agentix/plugins/datasets/swe/
-    ├── __init__.py    — public exports
-    ├── swe.py         — sandbox implementation
-    └── default.nix    — git/patch/libstdc++ for SWE-bench images
+plugins/datasets/swebench/
+├── src/
+│   ├── __init__.py    — public exports
+│   ├── env.py         — sandbox env preparation
+│   ├── score.py       — sandbox scoring
+│   └── utils.py       — shared helpers
+└── src/default.nix    — git/patch/libstdc++ for SWE-bench images
 ```
 
 ## Architecture

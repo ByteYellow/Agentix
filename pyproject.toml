@@ -100,7 +100,7 @@ include = [
     "agentix",
     "plugins/abridge/agentix",
     "plugins/agents/claude-code/agentix",
-    "plugins/datasets/swe/agentix",
+    "plugins/datasets/swebench/src",
     "plugins/deployments/docker/agentix",
     "plugins/deployments/daytona/agentix",
     "plugins/deployments/e2b/agentix",
@@ -116,7 +116,7 @@ exclude = ["**/__pycache__", "**/.venv", ".venv", "**/build"]
 extraPaths = [
     "plugins/abridge",
     "plugins/agents/claude-code",
-    "plugins/datasets/swe",
+    "plugins/datasets/swebench/src",
     "plugins/deployments/docker",
     "plugins/deployments/daytona",
     "plugins/deployments/e2b",
