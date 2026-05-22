@@ -3,6 +3,21 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
+name = "agentix-deployment-docker"
+version = "0.1.4"
+source = { editable = "../../plugins/deployments/docker" }
+dependencies = [
+    { name = "agentixx" },
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentixx", editable = "../../" },
+    { name = "httpx", specifier = ">=0.27" },
+]
+
+[[package]]
 name = "agentix-runtime-basic"
 version = "0.1.4"
 source = { editable = "../../plugins/runtime-basic" }
@@ -381,12 +396,14 @@ name = "hello-world"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "agentix-deployment-docker" },
     { name = "agentix-runtime-basic" },
     { name = "agentixx" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "agentix-deployment-docker", editable = "../../plugins/deployments/docker" },
     { name = "agentix-runtime-basic", editable = "../../plugins/runtime-basic" },
     { name = "agentixx", editable = "../../" },
 ]

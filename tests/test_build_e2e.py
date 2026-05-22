@@ -135,8 +135,8 @@ def test_remote_target_importable(bundle: str) -> None:
     out = _sh(
         bundle,
         "/nix/runtime/venv/bin/python -c "
-        "'import hello_world, agentix, agentix.bash; "
-        "print(hello_world.run()); print(hello_world.ripgrep_version())'",
+        "'import main, agentix, agentix.bash; "
+        "print(main.run()); print(main.ripgrep_version())'",
     )
     assert "hello, world" in out
     assert "ripgrep" in out
@@ -188,8 +188,8 @@ def test_platform_bundle_builds_and_runs(platform: str, machine: str) -> None:
             "readlink -f /nix/runtime/venv/bin/python; "
             "/nix/runtime/venv/bin/python --version; "
             "/nix/runtime/venv/bin/python -c "
-            "'import agentix, hello_world, agentix.bash; "
-            "print(hello_world.run()); print(hello_world.ripgrep_version())'; "
+            "'import agentix, main, agentix.bash; "
+            "print(main.run()); print(main.ripgrep_version())'; "
             "/nix/runtime/venv/bin/agentix-server --help",
         )
         lines = [line.strip() for line in out.splitlines() if line.strip()]
