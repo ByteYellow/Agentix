@@ -190,9 +190,7 @@ def make_sio(
     # `sio_emit`  — worker wants to broadcast an event on a namespace;
     #               we pack the payload and call sio.emit there.
 
-    _broadcast_tasks: set[asyncio.Task] = set()
-
-    def _on_worker_sio_frame(frame: dict[str, Any]) -> None:
+    async def _on_worker_sio_frame(frame: dict[str, Any]) -> None:
         kind = frame.get("type")
         namespace = frame.get("namespace")
         if not isinstance(namespace, str) or not namespace.startswith("/"):
@@ -201,11 +199,7 @@ def make_sio(
             event = frame.get("event")
             if not isinstance(event, str):
                 return
-            task = asyncio.create_task(
-                sio.emit(event, pack(frame.get("data")), namespace=namespace),
-            )
-            _broadcast_tasks.add(task)
-            task.add_done_callback(_broadcast_tasks.discard)
+            await sio.emit(event, pack(frame.get("data")), namespace=namespace)
         elif kind == "sio_open":
             if namespace in opened_namespaces or namespace == "/":
                 return

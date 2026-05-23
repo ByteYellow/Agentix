@@ -14,8 +14,13 @@ from agentix.deployment.docker import DockerDeployment
 
 from agentix import RuntimeClient
 from agentix.deployment.base import SandboxConfig, session
+from agentix.log import configure_logging as configure_agentix_logging
 
 logger = logging.getLogger(__name__)
+
+
+def configure_example_logging() -> None:
+    configure_agentix_logging(default_context="host")
 
 
 def hello() -> str:
@@ -24,6 +29,14 @@ def hello() -> str:
     logger.info("proc.stderr: %s", proc.stderr)
     logger.info("proc.returncode: %s", proc.returncode)
     return proc.stdout.splitlines()[0]
+
+
+def run() -> str:
+    return "hello, world"
+
+
+def ripgrep_version() -> str:
+    return hello()
 
 
 async def main():
@@ -46,4 +59,5 @@ async def main():
 if __name__ == "__main__":
     import asyncio
 
+    configure_example_logging()
     asyncio.run(main())

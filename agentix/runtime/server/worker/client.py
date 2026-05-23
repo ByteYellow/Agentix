@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import os
 import sys
@@ -128,7 +129,7 @@ class WorkerBackend(Protocol):
     async def shutdown(self) -> None: ...
 
 
-SioFrameHandler = Callable[[dict[str, Any]], None]
+SioFrameHandler = Callable[[dict[str, Any]], Any]
 """Called from the worker read loop for each `sio_emit` or
 `sio_subscribe` frame the worker produces. The SIO server layer
 installs one; the in-process backend has no transport hop."""
@@ -173,6 +174,7 @@ class _SubprocessWorker:
     ) -> None:
         self._python = python
         self._runtime_bin_dir = runtime_bin_dir
+        self._worker_id = _new_id()[:8]
 
         self._proc: asyncio.subprocess.Process | None = None
         self._send_lock = asyncio.Lock()
@@ -188,6 +190,13 @@ class _SubprocessWorker:
     async def start(self) -> None:
         env = _clean_worker_env(self._runtime_bin_dir)
         env["AGENTIX_WORKER_IMPORT_ROOT"] = str(_WORKER_IMPORT_ROOT)
+        env["AGENTIX_WORKER_ID"] = self._worker_id
+        env["AGENTIX_LOG_CONTEXT"] = env.get(
+            "AGENTIX_WORKER_LOG_CONTEXT",
+            "sandbox-{uname}-worker-{id}",
+        )
+        if worker_log_format := env.get("AGENTIX_WORKER_LOG_FORMAT"):
+            env["AGENTIX_LOG_FORMAT"] = worker_log_format
         self._proc = await asyncio.create_subprocess_exec(
             self._python,
             "-c",
@@ -235,7 +244,7 @@ class _SubprocessWorker:
                 frame = await read_frame(self._proc.stdout)
                 if frame is None:
                     break
-                self._on_frame(frame)
+                await self._on_frame(frame)
         except Exception:
             logger.exception("runtime worker read loop crashed")
         finally:
@@ -246,7 +255,7 @@ class _SubprocessWorker:
                     fut.set_exception(RuntimeError(err.message))
             self._pending.clear()
 
-    def _on_frame(self, frame: dict[str, Any]) -> None:
+    async def _on_frame(self, frame: dict[str, Any]) -> None:
         kind = frame.get("type")
         if kind == "ready":
             self._ready.set()
@@ -268,7 +277,9 @@ class _SubprocessWorker:
         elif kind in ("sio_emit", "sio_open"):
             if self._sio_handler is not None:
                 try:
-                    self._sio_handler(frame)
+                    result = self._sio_handler(frame)
+                    if inspect.isawaitable(result):
+                        await result
                 except Exception:
                     logger.debug("sio frame handler raised; dropping", exc_info=True)
         else:

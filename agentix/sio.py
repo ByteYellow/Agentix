@@ -154,14 +154,7 @@ class Namespace:
 
     async def emit(self, event: str, data: Any = None) -> None:
         """Emit `event` on this namespace to all connected hosts."""
-        _bridge.send_frame(
-            {
-                "type": "sio_emit",
-                "namespace": self.namespace,
-                "event": event,
-                "data": data,
-            }
-        )
+        _emit_nowait(self.namespace, event, data)
 
     def on(self, event: str, handler: Handler) -> None:
         """Register an additional handler for `event`."""
@@ -289,6 +282,17 @@ def _dispatch_inbound(namespace: str, event: str, data: Any) -> None:
 
 def _is_installed() -> bool:
     return _bridge.is_installed()
+
+
+def _emit_nowait(namespace: str, event: str, data: Any = None) -> None:
+    _bridge.send_frame(
+        {
+            "type": "sio_emit",
+            "namespace": namespace,
+            "event": event,
+            "data": data,
+        }
+    )
 
 
 __all__ = [

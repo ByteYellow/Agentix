@@ -211,12 +211,9 @@ async def _amain() -> None:
 
 
 def main() -> None:
-    level_name = os.environ.get("AGENTIX_LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
-    logging.basicConfig(
-        level=level,
+    _log.configure_logging(
+        default_context="sandbox-{uname}-worker-{id}",
         stream=sys.stderr,
-        format="%(asctime)s [%(name)s] %(message)s",
     )
     try:
         asyncio.run(_amain())
