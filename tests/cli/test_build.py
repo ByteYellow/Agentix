@@ -304,6 +304,33 @@ class TestStageContext:
         assert not (stage / "repo" / ".venv").exists()
         assert not (stage / "repo" / "__pycache__").exists()
 
+    def test_nested_build_dir_not_skipped(self, tmp_path: Path) -> None:
+        """The repo-root `build/` dir is a `python -m build` / dry-run
+        output that's correctly skipped — but a *nested* `build/` like
+        `agentix/cli/build/` is a real package that must survive into
+        the build context. `shutil.ignore_patterns` would strip both;
+        the staging copy uses a path-aware ignore instead.
+        """
+        repo = _make_project(tmp_path / "repo")
+        _git_init(repo)
+        (repo / "build").mkdir()
+        (repo / "build" / "stale_output.txt").write_text("dry-run leftovers")
+        nested = repo / "agentix" / "cli" / "build"
+        nested.mkdir(parents=True)
+        (nested / "__init__.py").write_text("# the click command lives here\n")
+        (nested / "context.py").write_text("# real source\n")
+
+        stage = tmp_path / "stage"
+        build.stage_context(stage, context_root=repo, python_version="311", platform="linux/amd64")
+
+        # Top-level `build/` skipped — same as before.
+        assert not (stage / "repo" / "build").exists()
+        # Nested `build/` package preserved — the bug we're regressing
+        # against would have stripped it, leaving the in-container
+        # `uv sync` unable to install `agentix.cli.build.closures`.
+        assert (stage / "repo" / "agentix" / "cli" / "build" / "__init__.py").is_file()
+        assert (stage / "repo" / "agentix" / "cli" / "build" / "context.py").is_file()
+
     def test_builder_files_staged(self, tmp_path: Path) -> None:
         stage = self._staged(tmp_path)
         for name in ("flake.nix", "flake.lock", "Dockerfile", "bundle-build.sh", "bootstrap.sh"):

@@ -21,21 +21,20 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Callable
 from importlib import resources
 from pathlib import Path
 
 from agentix.cli.build.platform import nix_system_for_platform, normalize_platform
 
-# Directories never copied into the build context — caches, build
-# outputs, virtualenvs, VCS metadata. The context is hashed by Docker;
-# keeping it lean keeps builds fast and cacheable.
-_SOURCE_SKIP = frozenset({
+# Directories never copied into the build context, no matter where in
+# the tree they appear — caches, virtualenvs, VCS metadata. They have
+# no business in a release wheel and only inflate the Docker context
+# digest, hurting cache hits.
+_SKIP_ANYWHERE = frozenset({
     ".git",
     ".venv",
     "venv",
-    "build",
-    "dist",
-    "result",
     "__pycache__",
     ".pytest_cache",
     ".ruff_cache",
@@ -43,6 +42,32 @@ _SOURCE_SKIP = frozenset({
     ".direnv",
     "node_modules",
 })
+
+# Directories skipped ONLY at the repo root — these are conventional
+# build-output names (`python -m build` / hatchling / Nix). Stripping
+# them everywhere would also strip nested packages that happen to share
+# the name, e.g. `agentix/cli/build/` (the package that owns this very
+# file) or any user project's `agentix/<plugin>/dist/`.
+_SKIP_TOP_LEVEL = frozenset({"build", "dist", "result"})
+
+
+def _make_ignore(context_root: Path) -> Callable[[str, list[str]], set[str]]:
+    """Build a `shutil.copytree(ignore=...)` callback.
+
+    `shutil.ignore_patterns` matches against basenames at every depth,
+    which is exactly the wrong semantics for the `build/` / `dist/` /
+    `result/` entries — they're top-level conventions, not "skip any
+    directory of this name anywhere in the tree".
+    """
+    root = str(context_root)
+
+    def ignore(src_dir: str, names: list[str]) -> set[str]:
+        skip = {n for n in names if n in _SKIP_ANYWHERE}
+        if src_dir == root:
+            skip.update(n for n in names if n in _SKIP_TOP_LEVEL)
+        return skip
+
+    return ignore
 
 # Files staged verbatim from `agentix/builder/` into the build context.
 _BUILDER_FILES = (
@@ -127,7 +152,7 @@ def stage_context(
     shutil.copytree(
         context_root,
         repo_dest,
-        ignore=shutil.ignore_patterns(*_SOURCE_SKIP),
+        ignore=_make_ignore(context_root),
         symlinks=True,
     )
 
