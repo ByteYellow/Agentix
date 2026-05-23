@@ -16,14 +16,14 @@ import sys
 import traceback
 from typing import Any
 
-from agentix import log as _log
 from agentix import sio as _sio
 from agentix.runtime.server.worker.invoker import CallableInvoker
 from agentix.runtime.shared.callables import RemoteCallable
 from agentix.runtime.shared.framing import read_frame, write_frame
 from agentix.runtime.shared.idents import CallId
 from agentix.runtime.shared.models import RemoteError, RemoteRequest
-from agentix.trace._bridge import DISPATCH_CALL_ID, install_worker_bridge
+from agentix.utils import log as _log
+from agentix.utils.trace._bridge import DISPATCH_CALL_ID, install_worker_bridge
 
 logger = logging.getLogger("agentix.runtime.server.worker.process")
 

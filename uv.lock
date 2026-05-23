@@ -19,6 +19,7 @@ members = [
     "agentix-agent-mini-swe-agent",
     "agentix-bridge",
     "agentix-dataset-swe",
+    "agentix-deployment-apptainer",
     "agentix-deployment-daytona",
     "agentix-deployment-docker",
     "agentix-deployment-e2b",
@@ -84,6 +85,21 @@ dependencies = [
 requires-dist = [
     { name = "agentixx", editable = "." },
     { name = "swebench", specifier = ">=4.0" },
+]
+
+[[package]]
+name = "agentix-deployment-apptainer"
+version = "0.1.0"
+source = { editable = "plugins/deployments/apptainer" }
+dependencies = [
+    { name = "agentixx" },
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentixx", editable = "." },
+    { name = "httpx", specifier = ">=0.27" },
 ]
 
 [[package]]

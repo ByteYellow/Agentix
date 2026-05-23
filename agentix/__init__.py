@@ -9,7 +9,6 @@ import pkgutil
 
 __path__ = pkgutil.extend_path(__path__, __name__)
 
-from agentix import log, trace
 from agentix.deployment.base import (
     Deployment,
     Sandbox,
@@ -23,6 +22,7 @@ from agentix.deployment.base import (
 from agentix.runtime.client import RemoteCallError, RuntimeClient
 from agentix.runtime.client._sio_facade import AsyncClientNamespace
 from agentix.sio import Namespace, RemoteSioError, register_namespace
+from agentix.utils import log, trace
 
 __version__ = "0.2.7"
 

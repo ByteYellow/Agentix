@@ -10,7 +10,7 @@ import time
 import pytest
 
 from agentix import AsyncClientNamespace, RuntimeClient
-from agentix.log._config import LOG_CONTEXT_ATTR
+from agentix.utils.log._config import LOG_CONTEXT_ATTR
 from tests._namespace_target import (
     echo_via_namespace,
     emit_formatted_log,

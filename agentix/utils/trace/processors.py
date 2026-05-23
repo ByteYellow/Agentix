@@ -1,4 +1,4 @@
-"""Built-in `agentix.trace.Processor` implementations.
+"""Built-in `agentix.utils.trace.Processor` implementations.
 
 The abstract `Processor` and `Exporter` live in the package `__init__`
 because they're part of the core abstraction. Concrete implementations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from agentix.trace import Processor, Span, Trace
+from agentix.utils.trace import Processor, Span, Trace
 
 
 class ConsoleProcessor(Processor):

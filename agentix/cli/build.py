@@ -90,7 +90,7 @@ _SOURCE_SKIP = frozenset({
     "node_modules",
 })
 
-# Files staged verbatim from `agentix/nix/` into the build context.
+# Files staged verbatim from `agentix/builder/` into the build context.
 _BUILDER_FILES = ("flake.nix", "flake.lock", "Dockerfile", "bundle-build.sh")
 
 _BUILD_FORMATS = ("tar", "oci-image")
@@ -208,8 +208,8 @@ def resolve_context(src: Path) -> tuple[Path, Path]:
 
 
 def _shipped(name: str) -> bytes:
-    """Read a builder file shipped as `agentix/nix/<name>` package data."""
-    f = resources.files("agentix") / "nix" / name
+    """Read a builder file shipped as `agentix/builder/<name>` package data."""
+    f = resources.files("agentix.builder") / name
     if not f.is_file():
         raise SystemExit(f"shipped builder file {name!r} missing — reinstall agentixx")
     return f.read_bytes()

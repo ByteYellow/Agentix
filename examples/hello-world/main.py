@@ -7,14 +7,13 @@ toolchain, and plugin/project system closures.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import subprocess
 
-from agentix.deployment.docker import DockerDeployment
-
 from agentix import RuntimeClient
-from agentix.deployment.base import SandboxConfig, session
-from agentix.log import configure_logging as configure_agentix_logging
+from agentix.deployment.base import SandboxConfig, load_deployment, session
+from agentix.utils.log import configure_logging as configure_agentix_logging
 
 logger = logging.getLogger(__name__)
 
@@ -39,21 +38,49 @@ def ripgrep_version() -> str:
     return hello()
 
 
-async def main():
-    deployment = DockerDeployment()
-    config = SandboxConfig(
-        image="python:3.13-slim",
-        bundle="hello-world",
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--deployment",
+        default="local",
+        help=(
+            "Deployment backend registered under the `agentix.deployment` "
+            "entry-point group (e.g. `local` for Docker, `apptainer` for HPC)."
+        ),
     )
+    parser.add_argument(
+        "--image",
+        default="python:3.13-slim",
+        help=(
+            "Task base image. For `local`: a Docker image ref. For "
+            "`apptainer`: any reference apptainer can pull "
+            "(`docker://...`, `library://...`, a local `.sif`, etc.)."
+        ),
+    )
+    parser.add_argument(
+        "--bundle",
+        default="hello-world",
+        help=(
+            "Agentix bundle reference. For `local`: a Docker image tag. "
+            "For `apptainer`: path to a tar bundle produced by "
+            "`agentix build --format tar`."
+        ),
+    )
+    return parser.parse_args()
+
+
+async def main(args: argparse.Namespace | None = None) -> None:
+    args = args or _parse_args()
+    deployment_cls = load_deployment(args.deployment)
+    deployment = deployment_cls()
+    config = SandboxConfig(image=args.image, bundle=args.bundle)
     logger.info("config: %s", config)
     async with session(deployment, config) as sandbox:
         async with RuntimeClient(sandbox.runtime_url) as client:
-            # Run function in host
             result = hello()
-            print(f'Host result: {result}')
-            # Run same function in sandbox
+            print(f"Host result: {result}")
             result = await client.remote(hello)
-            print(f'Sandbox result: {result}')
+            print(f"Sandbox result: {result}")
 
 
 if __name__ == "__main__":

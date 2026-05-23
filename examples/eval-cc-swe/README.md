@@ -5,7 +5,7 @@ official SWE-bench eval image, run Claude Code against `/testbed` via
 an in-sandbox Anthropic→OpenAI proxy (so any OpenAI-compatible model
 serves), extract the diff, then spin up a fresh sandbox to apply the
 diff and score it with the official harness. LLM round-trips surface
-on the host through `agentix.trace` and feed abridge for rollout logs.
+on the host through `agentix.utils.trace` and feed abridge for rollout logs.
 
 ```
 examples/eval-cc-swe/

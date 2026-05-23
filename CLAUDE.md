@@ -3,7 +3,7 @@
 ## Product context
 
 Agentix targets **agent eval**, **RL rollouts**, and **rollout data
-collection** (via `agentix.trace` + `abridge`). Positioning: a friendlier
+collection** (via `agentix.utils.trace` + `abridge`). Positioning: a friendlier
 alternative to HTTP rollout servers such as
 [ProRL-Agent-Server](https://github.com/NVIDIA-NeMo/ProRL-Agent-Server)—
 integrate with importable callables and `client.remote(fn, ...)`, not
@@ -42,7 +42,7 @@ reserved Socket.IO namespaces:
 | Namespace | System  | Public API                                      |
 |-----------|---------|-------------------------------------------------|
 | `/`       | RPC     | `client.remote(fn, ...)`                        |
-| `/trace`  | tracing | `agentix.trace.span(...)` / `trace.Processor`    |
+| `/trace`  | tracing | `agentix.utils.trace.span(...)` / `trace.Processor` |
 | `/log`    | logging | stdlib `logging` (auto-bridged sandbox → host) |
 
 Plugins (`abridge`, future LLM tools, ...) MUST live on their own
@@ -128,15 +128,16 @@ ones land in the bundle.
 ```text
 agentix/
 ├── sio.py             — agentix.Namespace + register_namespace (sandbox side)
-├── log/               — stdlib logging Handler bridge (sandbox → host)
-├── trace/             — Trace + Span + SpanEvent + Processor
+├── utils/
+│   ├── log/           — stdlib logging Handler bridge (sandbox → host)
+│   └── trace/         — Trace + Span + SpanEvent + Processor
 ├── runtime/
 │   ├── shared/        — wire types, codec, framing
 │   ├── client/        — RuntimeClient (host) + AsyncClientNamespace
 │   └── server/        — FastAPI + Socket.IO + worker subprocess
 ├── deployment/        — Deployment Protocol + backend plugin loader
 ├── cli/               — `agentix build` + in-container `_assemble`
-└── nix/               — shipped builder (flake.nix, Dockerfile, bundle-build.sh)
+└── builder/           — in-container builder (flake.nix, Dockerfile, bundle-build.sh)
 ```
 
 One line per system:
@@ -144,12 +145,12 @@ One line per system:
 - **sio** — generic pipe-bridged Namespace API. Sandbox plugins
   subclass `agentix.Namespace`; host plugins subclass
   `agentix.AsyncClientNamespace`. Runtime knows zero plugin event names.
-- **log** — installs a `logging.Handler` on the worker's root logger;
-  every `LogRecord` ships over `/log` and replays on the host's logging
-  tree. Zero new API — users write `logger.info(...)` normally.
-- **trace** — OTel-style `Trace` + `Span` + `SpanEvent` + `Processor`.
-  Worker-side `Processor` ships span lifecycle as events on `/trace`;
-  host-side `RuntimeClient` auto-registers a consumer.
+- **utils.log** — installs a `logging.Handler` on the worker's root
+  logger; every `LogRecord` ships over `/log` and replays on the host's
+  logging tree. Zero new API — users write `logger.info(...)` normally.
+- **utils.trace** — OTel-style `Trace` + `Span` + `SpanEvent` +
+  `Processor`. Worker-side `Processor` ships span lifecycle as events
+  on `/trace`; host-side `RuntimeClient` auto-registers a consumer.
 - **runtime.shared** — msgpack codec, length-prefixed worker frames,
   pydantic wire models, branded wire ids.
 - **runtime.client** — `RuntimeClient.remote(fn, ...)` over Socket.IO
@@ -160,8 +161,10 @@ One line per system:
 - **deployment** — host-side `Deployment` Protocol and backend lookup.
 - **cli** — `agentix build [path]` (host) + `agentix.cli._assemble`
   (in-container closure discovery).
-- **nix** — `flake.nix`, `flake.lock`, `Dockerfile`, `bundle-build.sh`
-  shipped as wheel data; `agentix build` stages them per invocation.
+- **builder** — `flake.nix`, `flake.lock`, `Dockerfile`,
+  `bundle-build.sh` shipped as wheel data; `agentix build` stages them
+  per invocation. (Previously named `nix/`; renamed because the folder
+  also ships a `Dockerfile` and a shell script, so "nix" was misleading.)
 
 ## Remote Call Implementation
 
@@ -235,7 +238,7 @@ The whole repo is the context (so a uv-workspace member / cookbook
 example can resolve its path dependencies); the project is addressed
 by its subpath.
 
-Inside the container (`agentix/nix/bundle-build.sh`):
+Inside the container (`agentix/builder/bundle-build.sh`):
 
 1. **Toolchain** — `nix build .#toolchain` materializes the
    interpreter + uv into `/nix/store`. Python version comes from the
@@ -262,7 +265,7 @@ System-deps closures, two sources:
 
 Plugin/project Nix files follow one convention: `{ pkgs }: drv`. The
 builder hands every closure the same Nixpkgs revision (pinned in
-`agentix/nix/flake.lock`).
+`agentix/builder/flake.lock`).
 
 Result image layout (`/nix` is what gets mounted):
 

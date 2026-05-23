@@ -89,8 +89,8 @@ class RuntimeClient:
 
     def _register_core_namespaces(self) -> None:
         """Register agentix-core's built-in `/trace` and `/log` handlers."""
-        from agentix.log._bridge import HostLogNamespace
-        from agentix.trace._bridge import HostTraceNamespace
+        from agentix.utils.log._bridge import HostLogNamespace
+        from agentix.utils.trace._bridge import HostTraceNamespace
 
         self._namespaces.append(HostTraceNamespace())
         self._namespaces.append(HostLogNamespace())

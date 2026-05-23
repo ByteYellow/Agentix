@@ -17,7 +17,7 @@ short sub-span instead of attaching an event (see `log(...)` helper).
 Cross-process is not in this module. Transports
 (worker→server frame pipe, server→host Socket.IO) are concrete
 `Processor` implementations that live in `agentix.runtime.*`.
-`agentix.trace` itself never imports sockets, FastAPI, frames, or
+`agentix.utils.trace` itself never imports sockets, FastAPI, frames, or
 anything else transport-shaped.
 
 User surface (steady state):
@@ -377,7 +377,7 @@ class _Provider:
                 _logger.exception("processor.shutdown raised")
 
 
-_logger = logging.getLogger("agentix.trace")
+_logger = logging.getLogger("agentix.utils.trace")
 _provider = _Provider()
 
 
@@ -465,9 +465,9 @@ def span(name: str, *, span_id: str | None = None, **attrs: Any) -> Iterator[Spa
 
 
 # Built-in Processor implementations live in submodules. Re-exporting
-# the most common one here lets `from agentix.trace import ConsoleProcessor`
+# the most common one here lets `from agentix.utils.trace import ConsoleProcessor`
 # work, but the implementation stays out of __init__.py so this file
 # remains the core abstractions only.
-from agentix.trace.processors import ConsoleProcessor  # noqa: E402
+from agentix.utils.trace.processors import ConsoleProcessor  # noqa: E402
 
 _atexit.register(shutdown)

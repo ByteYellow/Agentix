@@ -28,11 +28,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 
 from agentix import __version__
-from agentix.log import configure_logging
 from agentix.runtime.server.sio import make_sio
 from agentix.runtime.server.worker import RuntimeWorkerClient
 from agentix.runtime.shared.codec import pack, unpack
 from agentix.runtime.shared.models import HealthResponse
+from agentix.utils.log import configure_logging
 
 configure_logging(default_context="sandbox-{uname}")
 logger = logging.getLogger("agentix.runtime")

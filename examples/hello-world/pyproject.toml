@@ -11,13 +11,15 @@ license = { text = "MIT" }
 dependencies = [
     "agentixx",
     "agentix-runtime-basic",
-    "agentix-deployment-docker"
+    "agentix-deployment-docker",
+    "agentix-deployment-apptainer",
 ]
 
 [tool.uv.sources]
 agentixx = { path = "../..", editable = true }
 agentix-runtime-basic = { path = "../../plugins/runtime-basic", editable = true }
 agentix-deployment-docker = { path = "../../plugins/deployments/docker", editable = true }
+agentix-deployment-apptainer = { path = "../../plugins/deployments/apptainer", editable = true }
 
 [tool.agentix]
 nix = "default.nix"

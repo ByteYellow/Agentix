@@ -15,7 +15,7 @@ from minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 
 from agentix import RuntimeClient, bash
 from agentix.deployment.base import SandboxConfig, session
-from agentix.log import configure_logging
+from agentix.utils.log import configure_logging
 
 DEFAULT_IMAGE = "python:3.13-slim"
 DEFAULT_WORKDIR = "/workspace/run-mini-swe-agent"
