@@ -8,6 +8,10 @@ import os
 
 import agentix.agents.mini_swe_agent as mini_swe
 from agentix.deployment.docker import DockerDeployment
+from minisweagent.agents.default import AgentConfig, DefaultAgent
+from minisweagent.config import get_config_from_spec
+from minisweagent.environments.local import LocalEnvironment, LocalEnvironmentConfig
+from minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 
 from agentix import RuntimeClient, bash
 from agentix.deployment.base import SandboxConfig, session
@@ -25,7 +29,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--platform", default=None)
     parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     parser.add_argument("--model", default=os.getenv("MINI_SWE_MODEL", DEFAULT_MODEL))
-    parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument(
         "--task",
@@ -45,23 +48,29 @@ async def main() -> None:
         print(f"runtime_url={sandbox.runtime_url}", flush=True)
         async with RuntimeClient(sandbox.runtime_url, timeout=args.timeout + 180) as client:
             await prepare_workspace(client, args.workdir)
-            result = await client.remote(
-                mini_swe.run,
-                task=args.task,
-                workdir=args.workdir,
-                model=args.model,
-                max_steps=args.max_steps,
-                timeout=args.timeout,
-                env=forward_model_env(),
-            )
-            print(f"mini_exit_status={result.exit_status}", flush=True)
-            print(f"mini_calls={result.n_calls} mini_cost={result.cost}", flush=True)
-            if result.submission:
+            try:
+                agent = build_agent(
+                    model_name=args.model,
+                    api_key=os.environ["OPENAI_API_KEY"],
+                    api_base=os.environ["OPENAI_BASE_URL"],
+                    workdir=args.workdir,
+                )
+                result = await client.remote(
+                    mini_swe.run,
+                    task=args.task,
+                    workdir=args.workdir,
+                    agent=agent,
+                )
+            except Exception as exc:
+                print("mini_run_error:", flush=True)
+                print(f"{type(exc).__name__}: {exc}", flush=True)
+                await print_verification(client, args.workdir)
+                return
+            print(f"mini_exit_status={result.get('exit_status', 'unknown')}", flush=True)
+            submission = str(result.get("submission", ""))
+            if submission:
                 print("mini_submission:", flush=True)
-                print(result.submission.rstrip(), flush=True)
-            if result.details.get("error"):
-                print("mini_error:", flush=True)
-                print(str(result.details["error"]).rstrip(), flush=True)
+                print(submission.rstrip(), flush=True)
             await print_verification(client, args.workdir)
 
 
@@ -97,13 +106,37 @@ PY
         print(result.stderr.rstrip(), flush=True)
 
 
-def forward_model_env() -> dict[str, str]:
-    env: dict[str, str] = {}
-    for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT"):
-        value = os.getenv(key)
-        if value:
-            env[key] = value
-    return env
+def build_agent(
+    *,
+    model_name: str,
+    api_key: str,
+    api_base: str,
+    workdir: str,
+) -> DefaultAgent:
+    base_cfg = get_config_from_spec("mini.yaml")
+
+    model_raw = dict(base_cfg.get("model", {}))
+    model_raw["model_name"] = model_name
+    model_kwargs = dict(model_raw.get("model_kwargs", {}))
+    model_kwargs["api_key"] = api_key
+    model_kwargs["api_base"] = api_base
+    model_raw["model_kwargs"] = model_kwargs
+    model_raw["cost_tracking"] = "ignore_errors"
+    model_config = LitellmModelConfig.model_validate(model_raw)
+
+    environment_raw = dict(base_cfg.get("environment", {}))
+    environment_raw["cwd"] = workdir
+    environment_config = LocalEnvironmentConfig.model_validate(environment_raw)
+
+    agent_raw = dict(base_cfg.get("agent", {}))
+    agent_raw.pop("mode", None)
+    agent_raw.pop("confirm_exit", None)
+    agent_config = AgentConfig.model_validate(agent_raw)
+    return DefaultAgent(
+        LitellmModel(**model_config.model_dump(mode="python")),
+        LocalEnvironment(**environment_config.model_dump(mode="python")),
+        **agent_config.model_dump(mode="python"),
+    )
 
 
 def shell_quote(value: str) -> str:

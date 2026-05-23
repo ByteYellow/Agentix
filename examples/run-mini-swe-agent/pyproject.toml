@@ -21,5 +21,8 @@ agentix-runtime-basic = { path = "../../plugins/runtime-basic", editable = true 
 agentix-deployment-docker = { path = "../../plugins/deployments/docker", editable = true }
 agentix-agent-mini-swe-agent = { path = "../../plugins/agents/mini-swe-agent", editable = true }
 
+[tool.agentix]
+nix = "default.nix"
+
 [tool.hatch.build.targets.wheel]
 only-include = ["main.py"]

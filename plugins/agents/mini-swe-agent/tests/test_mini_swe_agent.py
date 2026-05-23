@@ -1,33 +1,49 @@
 from __future__ import annotations
 
-import asyncio
-
 import agentix.agents.mini_swe_agent as mini_swe
+import pytest
 
 
-def test_run_success(monkeypatch):
-    def fake_run_sync(**kwargs):
-        return mini_swe._SyncResult(
-            details={"exit_status": "submitted", "submission": "diff --git ..."},
-            output_path="/tmp/out.jsonl",
-            cost=1.25,
-            n_calls=3,
+class DummyEnvConfig:
+    def __init__(self) -> None:
+        self.cwd = ""
+
+
+class DummyEnv:
+    def __init__(self) -> None:
+        self.config = DummyEnvConfig()
+
+
+def test_run_success(tmp_path):
+    class DummyAgent:
+        def __init__(self) -> None:
+            self.env = DummyEnv()
+
+        def run(self, task: str):
+            return {"exit_status": "submitted", "submission": "diff --git ..."}
+
+    agent = DummyAgent()
+    result = mini_swe.run(
+        "fix bug",
+        workdir=str(tmp_path),
+        agent=agent,
+    )
+    assert result["exit_status"] == "submitted"
+    assert result["submission"] == "diff --git ..."
+    assert agent.env.config.cwd == str(tmp_path)
+
+
+def test_run_exception_propagates(tmp_path):
+    class BoomAgent:
+        def __init__(self) -> None:
+            self.env = DummyEnv()
+
+        def run(self, task: str):
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        mini_swe.run(
+            "fix bug",
+            workdir=str(tmp_path),
+            agent=BoomAgent(),
         )
-
-    monkeypatch.setattr(mini_swe, "_run_sync", fake_run_sync)
-    result = asyncio.run(mini_swe.run("fix bug"))
-    assert result.exit_status == "submitted"
-    assert result.submission == "diff --git ..."
-    assert result.output_path == "/tmp/out.jsonl"
-    assert result.cost == 1.25
-    assert result.n_calls == 3
-
-
-def test_run_error(monkeypatch):
-    def fake_run_sync(**kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(mini_swe, "_run_sync", fake_run_sync)
-    result = asyncio.run(mini_swe.run("fix bug"))
-    assert result.exit_status == "error"
-    assert "boom" in str(result.details.get("error", ""))
