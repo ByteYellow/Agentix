@@ -296,6 +296,24 @@ def _artifact_component(value: str) -> str:
     return component or "bundle"
 
 
+def _docker_tag_component(value: str) -> str:
+    component = _artifact_component(value).lower().strip(".-")
+    if not component:
+        return "bundle"
+    if not re.match(r"[a-z0-9_]", component):
+        component = f"_{component}"
+    return component
+
+
+def _tar_cache_image_ref(*, name: str, project_subpath: Path, platform: str) -> str:
+    platform = normalize_platform(platform)
+    digest = hashlib.sha256(f"{name}\0{project_subpath.as_posix()}\0{platform}".encode()).hexdigest()[:12]
+    platform_part = _platform_slug(platform)
+    max_name_len = 128 - len(platform_part) - len(digest) - 2
+    name_part = _docker_tag_component(name)[:max_name_len].rstrip(".-") or "bundle"
+    return f"agentix-bundle-cache:{name_part}-{platform_part}-{digest}"
+
+
 def _default_tar_name(name: str, tag: str, platform: str) -> str:
     return f"{_artifact_component(name)}-{_artifact_component(tag)}-{_platform_slug(platform)}.bundle.tar"
 
@@ -500,22 +518,19 @@ def _build_tar_bundle(
     platform: str,
 ) -> Path:
     """Build a portable Agentix bundle tar containing manifest.json + nix/."""
-    temp_ref = f"agentix-bundle-build-{uuid4().hex[:12]}:latest"
+    cache_ref = _tar_cache_image_ref(name=name, project_subpath=project_subpath, platform=platform)
     with TemporaryDirectory(prefix="agentix-bundle-") as tmp:
         bundle_root = Path(tmp) / "bundle"
         bundle_root.mkdir()
-        try:
-            _docker_build_image(stage, tags=[temp_ref], project_subpath=project_subpath, platform=platform)
-            _copy_nix_from_image(temp_ref, bundle_root, platform=platform)
-            if not (bundle_root / "nix").is_dir():
-                raise SystemExit(f"docker image {temp_ref!r} did not contain /nix")
-            _validate_bundle_tree(bundle_root / "nix")
-            digest = _tree_digest(bundle_root / "nix")
-            manifest = _bundle_manifest(name=name, tag=tag, platform=platform, digest=digest)
-            (bundle_root / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-            _write_bundle_tar(bundle_root, output_path)
-        finally:
-            _run(["docker", "image", "rm", "-f", temp_ref], capture=True, check=False)
+        _docker_build_image(stage, tags=[cache_ref], project_subpath=project_subpath, platform=platform)
+        _copy_nix_from_image(cache_ref, bundle_root, platform=platform)
+        if not (bundle_root / "nix").is_dir():
+            raise SystemExit(f"docker image {cache_ref!r} did not contain /nix")
+        _validate_bundle_tree(bundle_root / "nix")
+        digest = _tree_digest(bundle_root / "nix")
+        manifest = _bundle_manifest(name=name, tag=tag, platform=platform, digest=digest)
+        (bundle_root / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        _write_bundle_tar(bundle_root, output_path)
     return output_path
 
 

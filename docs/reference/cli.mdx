@@ -88,6 +88,9 @@ nix/
 The `nix/` tree is the complete runtime closure and must appear at
 `/nix` inside a sandbox. Backends that stage bundles across machines can
 unpack this tar into their cache and bind it into task containers.
+The Docker carrier image used to produce the tar is kept locally under
+an `agentix-bundle-cache:*` tag and overwritten on later builds, so
+Docker/buildx can reuse it for incremental builds.
 
 `--format oci-image` preserves the Docker fast path. It loads a local
 Docker image tagged as `NAME:TAG` and `NAME:latest`, so

@@ -358,6 +358,20 @@ class TestTarBundle:
             "ghcr.io-acme-demo-1.0.0-linux-amd64.bundle.tar"
         )
 
+    def test_tar_cache_image_ref_is_stable_across_output_tags(self) -> None:
+        ref = build._tar_cache_image_ref(
+            name="ghcr.io/acme/Demo Agent",
+            project_subpath=Path("examples/demo"),
+            platform="linux/amd64",
+        )
+
+        assert ref.startswith("agentix-bundle-cache:ghcr.io-acme-demo-agent-linux-amd64-")
+        assert ref == build._tar_cache_image_ref(
+            name="ghcr.io/acme/Demo Agent",
+            project_subpath=Path("examples/demo"),
+            platform="amd64",
+        )
+
     def test_output_directory_gets_default_name(self, tmp_path: Path) -> None:
         out = build._tar_output_path(str(tmp_path / "dist"), name="demo", tag="1.0.0", platform="linux/arm64")
         assert out == tmp_path / "dist" / "demo-1.0.0-linux-arm64.bundle.tar"
@@ -507,18 +521,25 @@ class TestTarBundle:
         with pytest.raises(SystemExit, match="non-/nix tar member"):
             build._copy_nix_from_image("tmp:latest", tmp_path, platform="linux/amd64")
 
-    def test_docker_build_removes_temp_image(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls: list[list[str]] = []
+    def test_tar_build_keeps_cache_image(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        built_tags: list[list[str]] = []
+        copied_refs: list[str] = []
 
-        def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
-            calls.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0)
+        def fake_build_image(
+            _stage: Path,
+            *,
+            tags: list[str],
+            project_subpath: Path,
+            platform: str,
+        ) -> None:
+            del project_subpath, platform
+            built_tags.append(tags)
 
-        monkeypatch.setattr(build, "_run", fake_run)
-        monkeypatch.setattr(build, "_docker_build_image", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(build, "_docker_build_image", fake_build_image)
 
         def fake_copy_nix(_image_ref: str, bundle_root: Path, *, platform: str) -> None:
             del platform
+            copied_refs.append(_image_ref)
             entry_dir = bundle_root / "nix" / "runtime" / "venv" / "bin"
             entry_dir.mkdir(parents=True)
             (entry_dir / "agentix-server").write_text("#!/bin/sh\n")
@@ -533,7 +554,9 @@ class TestTarBundle:
             platform="linux/amd64",
         )
 
-        assert calls[-1][:4] == ["docker", "image", "rm", "-f"]
+        cache_ref = build._tar_cache_image_ref(name="demo", project_subpath=Path("."), platform="linux/amd64")
+        assert built_tags == [[cache_ref]]
+        assert copied_refs == [cache_ref]
 
 
 # ── build: main / --dry-run ────────────────────────────────────────
