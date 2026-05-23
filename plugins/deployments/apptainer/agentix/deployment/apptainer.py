@@ -23,12 +23,15 @@ runtime server's port is reachable on `localhost` with no per-sandbox
 network setup. We pick a free port, pass it via `AGENTIX_BIND_PORT`,
 and `/health`-check it.
 
-Default isolation flags: `--userns --no-init --writable-tmpfs`. The
-user-namespace path works on hosts where pid1 doesn't have
-`CAP_SYS_ADMIN` in the initial mount namespace (e.g. inside a
-capability-restricted scheduler runtime). On a fully permissive host
-you can swap in the stricter `--containall` family via the
-`AGENTIX_APPTAINER_FLAGS` env override.
+Default isolation flags: `--userns --no-init --writable-tmpfs
+--cleanenv`. The user-namespace path works on hosts where pid1
+doesn't have `CAP_SYS_ADMIN` in the initial mount namespace (e.g.
+inside a capability-restricted scheduler runtime); `--cleanenv`
+keeps the container's environment clear of host-side noise (most
+visibly an `LD_PRELOAD=/usr/lib64/libcuda.so` that GPU schedulers
+set, which spams ld.so warnings inside CPU-only task images). On a
+fully permissive host you can swap in the stricter `--containall`
+family via the `AGENTIX_APPTAINER_FLAGS` env override.
 """
 
 from __future__ import annotations
@@ -91,11 +94,17 @@ def _apptainer_bin() -> str:
 def _isolation_args() -> list[str]:
     """Return the isolation flags passed to `apptainer exec`.
 
-    Defaults to `--userns --no-init --writable-tmpfs`. This shape
-    works in capability-restricted hosts (e.g. inside a Ray worker
-    runtime where pid1 doesn't have `CAP_SYS_ADMIN` in the initial
-    mount namespace), at the cost of slightly weaker isolation than
-    `--containall` would give on a permissive host.
+    Defaults to `--userns --no-init --writable-tmpfs --cleanenv`.
+    This shape works in capability-restricted hosts (e.g. inside a
+    Ray worker runtime where pid1 doesn't have `CAP_SYS_ADMIN` in
+    the initial mount namespace), at the cost of slightly weaker
+    filesystem isolation than `--containall` would give on a
+    permissive host. `--cleanenv` keeps the container's env clean of
+    host noise (notably `LD_PRELOAD=/usr/lib64/libcuda.so` on GPU
+    nodes, which spams `cannot open shared object file` warnings
+    when the task image lacks libcuda). `--env K=V` arguments still
+    pass through, so `AGENTIX_BIND_PORT` and user `config.env` are
+    unaffected.
 
     Override via `AGENTIX_APPTAINER_FLAGS` (whitespace-separated). To
     add `--containall` back on a permissive host, set:
@@ -105,7 +114,7 @@ def _isolation_args() -> list[str]:
     override = os.environ.get("AGENTIX_APPTAINER_FLAGS")
     if override:
         return override.split()
-    return ["--userns", "--no-init", "--writable-tmpfs"]
+    return ["--userns", "--no-init", "--writable-tmpfs", "--cleanenv"]
 
 
 def _cache_root() -> Path:
