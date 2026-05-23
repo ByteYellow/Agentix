@@ -7,6 +7,7 @@ Lives in tests/ so the worker subprocess can import
 from __future__ import annotations
 
 import asyncio
+
 from pydantic import BaseModel
 
 

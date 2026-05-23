@@ -31,12 +31,12 @@ from typing import Any, Literal, ParamSpec, TypeVar, cast
 import httpx
 import socketio
 
-logger = logging.getLogger("agentix.runtime.client")
-
 from agentix.runtime.shared import MAX_MESSAGE_BYTES
 from agentix.runtime.shared.callables import RemoteCallable, display_name_for
 from agentix.runtime.shared.codec import pack, unpack
 from agentix.runtime.shared.models import HealthResponse, RemoteError
+
+logger = logging.getLogger("agentix.runtime.client")
 
 P = ParamSpec("P")
 R = TypeVar("R")
