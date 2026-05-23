@@ -40,7 +40,7 @@ from openai import AsyncOpenAI
 
 from agentix import RuntimeClient
 from agentix.deployment.base import SandboxConfig, session
-from agentix.log import configure_logging
+from agentix.utils.log import configure_logging
 
 WORKDIR = "/testbed"
 logger = logging.getLogger("eval_cc_swe.runner")

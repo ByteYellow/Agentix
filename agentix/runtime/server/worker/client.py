@@ -42,7 +42,7 @@ main()
 """
 _WORKER_IMPORT_ROOT = Path(__file__).resolve().parents[4]
 # Plugin `default.nix` derivations are symlink-joined into this path
-# inside the bundle image (see `agentix/nix/builder.nix`). Worker code
+# inside the bundle image (see `agentix/builder/flake.nix`). Worker code
 # (`subprocess.run("claude", ...)`, `c.remote(cc.run, ...)`, ...) must
 # be able to find those binaries by bare name.
 _RUNTIME_BIN_PATH = "/nix/runtime/bin"

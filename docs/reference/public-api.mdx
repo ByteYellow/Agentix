@@ -33,9 +33,13 @@ Top-level names exported by `agentix`:
 - `load_deployment`
 - `register_deployment`
 - `session`
-- `log`
-- `trace`
+- `log` (re-exported from `agentix.utils.log`)
+- `trace` (re-exported from `agentix.utils.trace`)
 - `__version__`
+
+The canonical submodule paths are `agentix.utils.log` and
+`agentix.utils.trace`; the top-level `agentix.log` / `agentix.trace`
+attributes are convenience aliases.
 
 ## Runtime client API
 

@@ -23,7 +23,7 @@ import logging
 import pytest
 
 from agentix import RuntimeClient
-from agentix.log._config import LOG_CONTEXT_ATTR
+from agentix.utils.log._config import LOG_CONTEXT_ATTR
 from tests import _worker_target as target
 from tests._namespace_target import emit_log_burst
 

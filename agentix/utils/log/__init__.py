@@ -1,7 +1,7 @@
-"""agentix.log — sandbox-side `logging` records ferried to the host.
+"""agentix.utils.log — sandbox-side `logging` records ferried to the host.
 
 This module is a thin bridge for the *third* observability pillar
-(distinct from `agentix.trace`). Workers don't need a custom API: just
+(distinct from `agentix.utils.trace`). Workers don't need a custom API: just
 use stdlib `logging`:
 
     import logging
@@ -33,14 +33,14 @@ from __future__ import annotations
 
 import logging
 
-from agentix.log._config import configure_logging
+from agentix.utils.log._config import configure_logging
 
 __all__ = ["configure_logging", "install_worker_bridge"]
 
 
 def install_worker_bridge(level: int = logging.NOTSET) -> logging.Handler:
     """Install the bridge handler on the root logger. Idempotent."""
-    from agentix.log._bridge import WorkerLogHandler
+    from agentix.utils.log._bridge import WorkerLogHandler
 
     root = logging.getLogger()
     for h in root.handlers:

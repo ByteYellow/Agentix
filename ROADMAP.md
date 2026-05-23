@@ -117,13 +117,13 @@ is still moving quickly.
 Future directions, listed so the framework can avoid architectural
 dead-ends without expanding the current API prematurely.
 
-- **OpenTelemetry trace export** — ship `agentix.trace` spans to a
+- **OpenTelemetry trace export** — ship `agentix.utils.trace` spans to a
   production observability platform (Datadog, Jaeger, Tempo, Honeycomb,
   any OTLP-compatible backend). Implementation should not change the
-  `agentix.trace` public API. Plan:
+  `agentix.utils.trace` public API. Plan:
 
-  - Keep `agentix.trace` (`Trace`, `Span`, `Processor`) as the user
-    surface. Sandbox code stays unchanged.
+  - Keep `agentix.utils.trace` (`Trace`, `Span`, `Processor`) as the
+    user surface. Sandbox code stays unchanged.
   - The sandbox already streams `/trace` via `ReliableStream`; the host
     receives via `HostTraceNamespace` and fans out through the existing
     provider, so a new `Processor` is the right plug-in point.
@@ -138,10 +138,10 @@ dead-ends without expanding the current API prematurely.
     owns the long-lived collector connection). A sandbox-side exporter
     is possible later for cases where the sandbox can reach the
     collector directly.
-  - User surface remains:
+  - User surface:
     ```python
-    from agentix import trace
-    from agentix.trace.otel import OTelExporter
+    from agentix.utils import trace
+    from agentix.utils.trace.otel import OTelExporter
 
     trace.add_processor(OTelExporter(endpoint="...", headers={...}))
     ```

@@ -14,7 +14,7 @@ from typing import Any
 import socketio
 
 from agentix import sio as _sio
-from agentix.log._config import LOG_CONTEXT_ATTR
+from agentix.utils.log._config import LOG_CONTEXT_ATTR
 
 NAMESPACE = "/log"
 RECORD_EVENT = "record"
@@ -47,11 +47,11 @@ class WorkerLogHandler(logging.Handler):
     Records ride a `ReliableStream` so the host receives every record
     even across SIO disconnects, with FIFO ordering.
 
-    Avoids self-recursion: `agentix.log` is excluded from forwarding to
+    Avoids self-recursion: `agentix.utils.log` is excluded from forwarding to
     prevent feedback if our own debug logs were ever enabled.
     """
 
-    _EXCLUDED_LOGGERS = ("agentix.sio", "agentix.log")
+    _EXCLUDED_LOGGERS = ("agentix.sio", "agentix.utils.log")
 
     def emit(self, record: logging.LogRecord) -> None:
         if any(record.name.startswith(prefix) for prefix in self._EXCLUDED_LOGGERS):

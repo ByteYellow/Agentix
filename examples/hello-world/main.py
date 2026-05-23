@@ -14,7 +14,7 @@ from agentix.deployment.docker import DockerDeployment
 
 from agentix import RuntimeClient
 from agentix.deployment.base import SandboxConfig, session
-from agentix.log import configure_logging as configure_agentix_logging
+from agentix.utils.log import configure_logging as configure_agentix_logging
 
 logger = logging.getLogger(__name__)
 

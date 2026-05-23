@@ -86,7 +86,7 @@ with [`abridge`](https://github.com/Agentiix/abridge) for eval and RL.
 </tr>
 <tr>
 <td><strong>Rollout data</strong></td>
-<td><code>agentix.trace</code> + <code>abridge</code></td>
+<td><code>agentix.utils.trace</code> + <code>abridge</code></td>
 <td>Per-rollout logs ready for eval and RL buffers</td>
 </tr>
 </table>

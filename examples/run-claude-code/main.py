@@ -26,7 +26,7 @@ from agentix.deployment.docker import DockerDeployment
 
 from agentix import RuntimeClient, bash
 from agentix.deployment.base import SandboxConfig, session
-from agentix.log import configure_logging
+from agentix.utils.log import configure_logging
 
 DEFAULT_IMAGE = "python:3.13-slim"
 DEFAULT_PLATFORM = "linux/amd64"
