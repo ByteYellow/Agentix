@@ -33,7 +33,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import NewType, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agentix.deployment._plugin import Registry
 
@@ -41,6 +41,41 @@ SandboxId = NewType("SandboxId", str)
 """Deployment-side handle for a running sandbox container. Returned by
 `Deployment.create(...)` and threaded back through `delete(...)` /
 `get(...)`."""
+
+
+class SandboxResource(BaseModel):
+    """Resource request for one sandbox."""
+
+    cpu: float | None = Field(
+        default=None,
+        gt=0,
+        description="Optional CPU count requested for the sandbox, e.g. 4 or 0.5.",
+    )
+    memory: int | str | None = Field(
+        default=None,
+        description=(
+            "Optional memory limit requested for the sandbox. "
+            "Strings use the container CLI unit syntax, e.g. `16g`."
+        ),
+    )
+    gpu: int | None = Field(
+        default=None,
+        gt=0,
+        description="Optional GPU count requested for the sandbox.",
+    )
+
+    @field_validator("memory")
+    @classmethod
+    def _validate_memory(cls, value: int | str | None) -> int | str | None:
+        if value is None:
+            return None
+        if isinstance(value, int):
+            if value <= 0:
+                raise ValueError("memory must be positive")
+            return value
+        if not value.strip():
+            raise ValueError("memory must not be empty")
+        return value
 
 
 class SandboxConfig(BaseModel):
@@ -75,6 +110,10 @@ class SandboxConfig(BaseModel):
         default=None,
         description="Optional env vars passed to the sandbox container.",
     )
+    resource: SandboxResource | None = Field(
+        default=None,
+        description="Optional resource request for CPU, memory, and GPU.",
+    )
 
 
 class SandboxInfo(BaseModel):
@@ -97,10 +136,10 @@ class Deployment(Protocol):
     """Sandbox lifecycle management. Structural type — backends don't
     inherit, they just implement the three methods.
 
-    Backends are typically classes registered as entry points; the
-    framework instantiates them with no arguments via `load_deployment`,
-    so any backend-specific configuration (API keys, regions, ...) is
-    read from environment variables in the backend's `__init__`.
+    Backends are typically classes registered as entry points. Backend
+    constructors may accept their own explicit config objects for direct
+    use; `load_deployment` still returns the class so callers can choose
+    how to instantiate it.
     """
 
     async def create(self, config: SandboxConfig) -> Sandbox: ...

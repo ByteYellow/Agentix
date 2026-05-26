@@ -48,7 +48,7 @@ import click
 
 from agentix.cli.build.bundle import _build_tar_bundle
 from agentix.cli.build.context import resolve_context, stage_context
-from agentix.cli.build.docker import _docker_build
+from agentix.cli.build.docker import ContainerBuildConfig, _docker_build
 from agentix.cli.build.naming import _tar_output_path, parse_name
 from agentix.cli.build.platform import (
     detect_default_platform,
@@ -96,6 +96,7 @@ Examples:
     agentix build . --name hello:dev      # bundle tar tagged as dev
     agentix build . --platform linux/amd64
     agentix build . --format oci-image    # Docker-compatible image path
+    agentix build . --container-bin podman
     agentix build . --format tar          # Agentix bundle tar (default)
     agentix build . --dry-run             # stage the build context only
 
@@ -150,6 +151,46 @@ Portable bundle tar layout:
     ),
 )
 @click.option("--dry-run", is_flag=True, help="Stage the build context to ./build/<name>/ and stop.")
+@click.option(
+    "--container-bin",
+    default=None,
+    metavar="BIN",
+    help="Docker-compatible build CLI to use. Default: docker.",
+)
+@click.option(
+    "--container-arg",
+    "container_args",
+    multiple=True,
+    metavar="ARG",
+    help="Extra argument passed to the container build command; repeat for multiple args.",
+)
+@click.option(
+    "--container-run-arg",
+    "container_run_args",
+    multiple=True,
+    metavar="ARG",
+    help="Extra argument passed when extracting a tar bundle with container run; repeat for multiple args.",
+)
+@click.option(
+    "--builder-base",
+    default=None,
+    metavar="IMAGE",
+    help="Builder base image. Default: nixos/nix:latest from the bundled Dockerfile.",
+)
+@click.option(
+    "--nix-substituter",
+    "nix_substituters",
+    multiple=True,
+    metavar="URL",
+    help="Nix binary cache substituter inside the build container; repeat in fallback order.",
+)
+@click.option(
+    "--nix-trusted-public-key",
+    "nix_trusted_public_keys",
+    multiple=True,
+    metavar="KEY",
+    help="Extra Nix cache public key inside the build container; repeat for multiple keys.",
+)
 def build(
     path: Path,
     name: str | None,
@@ -157,6 +198,12 @@ def build(
     output: str | None,
     platform: str | None,
     dry_run: bool,
+    container_bin: str | None,
+    container_args: tuple[str, ...],
+    container_run_args: tuple[str, ...],
+    builder_base: str | None,
+    nix_substituters: tuple[str, ...],
+    nix_trusted_public_keys: tuple[str, ...],
 ) -> int:
     """Package a Python project into a bundle artifact."""
     if output and fmt != "tar":
@@ -175,6 +222,14 @@ def build(
     platform = normalize_platform(platform) if platform else detect_default_platform()
     context_root, project_subpath = resolve_context(src)
     tar_output = _tar_output_path(output, name=name, tag=tag, platform=platform)
+    build_config = ContainerBuildConfig(
+        container_bin=container_bin or "docker",
+        container_args=container_args,
+        container_run_args=container_run_args,
+        builder_base=builder_base,
+        nix_substituters=nix_substituters,
+        nix_trusted_public_keys=nix_trusted_public_keys,
+    )
 
     if dry_run:
         out = REPO_ROOT / "build" / name
@@ -197,7 +252,14 @@ def build(
         stage = Path(tmp) / "ctx"
         stage_context(stage, context_root=context_root, python_version=python_version, platform=platform)
         if fmt == "oci-image":
-            ref = _docker_build(stage, name=name, tag=tag, project_subpath=project_subpath, platform=platform)
+            ref = _docker_build(
+                stage,
+                name=name,
+                tag=tag,
+                project_subpath=project_subpath,
+                platform=platform,
+                config=build_config,
+            )
             print(f"\nimage ready → {ref}", file=sys.stderr)
             if tag != "latest":
                 print(f"            → {name}:latest", file=sys.stderr)
@@ -209,6 +271,7 @@ def build(
                 tag=tag,
                 project_subpath=project_subpath,
                 platform=platform,
+                config=build_config,
             )
             print(f"\nbundle ready → {artifact}", file=sys.stderr)
     return 0

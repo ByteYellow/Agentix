@@ -10,7 +10,7 @@ layout is fixed and host-portable:
 
 The bundle is produced indirectly: the same Dockerfile that powers
 `--format oci-image` runs inside a transient cache image, and this
-module streams `/nix` out of that image (`docker run --entrypoint tar
+module streams `/nix` out of that image (`docker run --entrypoint tar`
 ... | tarfile.open`), validates the runtime tree's symlinks, hashes
 the result for content identity, and writes a portable tar.
 
@@ -33,7 +33,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from uuid import uuid4
 
-from agentix.cli.build.docker import _docker_build_image
+from agentix.cli.build.docker import ContainerBuildConfig, _build_container_run_args, _docker_build_image
 from agentix.cli.build.naming import _tar_cache_image_ref
 from agentix.cli.build.platform import nix_system_for_platform, normalize_platform
 
@@ -189,13 +189,22 @@ def _extract_nix_member(
     tar.extract(member, bundle_root)
 
 
-def _copy_nix_from_image(image_ref: str, bundle_root: Path, *, platform: str) -> None:
+def _copy_nix_from_image(
+    image_ref: str,
+    bundle_root: Path,
+    *,
+    platform: str,
+    config: ContainerBuildConfig | None = None,
+) -> None:
+    config = config or ContainerBuildConfig()
+    bin_name = config.container_bin
     cmd = [
-        "docker",
+        bin_name,
         "run",
         "--rm",
         "--platform",
         normalize_platform(platform),
+        *_build_container_run_args(config),
         "--entrypoint",
         "tar",
         image_ref,
@@ -213,7 +222,7 @@ def _copy_nix_from_image(image_ref: str, bundle_root: Path, *, platform: str) ->
             stderr=stderr,
         )
         if proc.stdout is None:
-            raise SystemExit("docker run did not provide a stdout pipe")
+            raise SystemExit(f"{bin_name} run did not provide a stdout pipe")
         deferred_dirs: list[tuple[Path, int]] = []
         try:
             with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
@@ -238,16 +247,18 @@ def _build_tar_bundle(
     tag: str,
     project_subpath: Path,
     platform: str,
+    config: ContainerBuildConfig | None = None,
 ) -> Path:
     """Build a portable Agentix bundle tar containing manifest.json + nix/."""
+    config = config or ContainerBuildConfig()
     cache_ref = _tar_cache_image_ref(name=name, project_subpath=project_subpath, platform=platform)
     with TemporaryDirectory(prefix="agentix-bundle-") as tmp:
         bundle_root = Path(tmp) / "bundle"
         bundle_root.mkdir()
-        _docker_build_image(stage, tags=[cache_ref], project_subpath=project_subpath, platform=platform)
-        _copy_nix_from_image(cache_ref, bundle_root, platform=platform)
+        _docker_build_image(stage, tags=[cache_ref], project_subpath=project_subpath, platform=platform, config=config)
+        _copy_nix_from_image(cache_ref, bundle_root, platform=platform, config=config)
         if not (bundle_root / "nix").is_dir():
-            raise SystemExit(f"docker image {cache_ref!r} did not contain /nix")
+            raise SystemExit(f"container image {cache_ref!r} did not contain /nix")
         _validate_bundle_tree(bundle_root / "nix")
         digest = _tree_digest(bundle_root / "nix")
         manifest = _bundle_manifest(name=name, tag=tag, platform=platform, digest=digest)

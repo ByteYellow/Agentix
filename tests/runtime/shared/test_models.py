@@ -6,7 +6,7 @@ import pickle
 
 import pytest
 
-from agentix.deployment.base import SandboxConfig
+from agentix.deployment.base import SandboxConfig, SandboxResource
 from agentix.runtime.shared.callables import RemoteCallable
 from agentix.runtime.shared.models import RemoteError, RemoteRequest, RemoteResponse
 
@@ -57,6 +57,29 @@ def test_sandbox_config_with_env():
         env={"FOO": "bar"},
     )
     assert cfg.env == {"FOO": "bar"}
+
+
+def test_sandbox_config_with_resource():
+    cfg = SandboxConfig(
+        image="ubuntu:24.04",
+        bundle="my-agent:0.1.0",
+        resource=SandboxResource(cpu=4, memory="16g", gpu=2),
+    )
+    assert cfg.resource is not None
+    assert cfg.resource.cpu == 4
+    assert cfg.resource.memory == "16g"
+    assert cfg.resource.gpu == 2
+
+
+def test_sandbox_resource_validates_positive_values():
+    with pytest.raises(Exception):
+        SandboxResource(cpu=0)
+    with pytest.raises(Exception):
+        SandboxResource(memory=0)
+    with pytest.raises(Exception):
+        SandboxResource(memory="")
+    with pytest.raises(Exception):
+        SandboxResource(gpu=0)
 
 
 def test_sandbox_config_with_platform():

@@ -389,6 +389,45 @@ class TestDockerBuild:
         assert "--load" in cmd
         assert "-t" in cmd
 
+    def test_podman_build_uses_plain_build_and_extra_args(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], *, cwd: Path | None = None, capture: bool = False) -> subprocess.CompletedProcess:
+            del cwd, capture
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setenv("https_proxy", "http://proxy.example:3128")
+        monkeypatch.setattr(docker, "_run", _fake_run)
+
+        docker._docker_build_image(
+            tmp_path,
+            tags=["demo:1.0.0"],
+            project_subpath=Path("."),
+            platform="linux/amd64",
+            config=docker.ContainerBuildConfig(
+                container_bin="podman",
+                container_args=("--isolation=chroot",),
+                builder_base="ghcr.io/nixos/nix:latest",
+                nix_substituters=("https://mirrors.tencent.com/nix-channels/store",),
+            ),
+        )
+
+        cmd = calls[0]
+        assert cmd[:4] == ["podman", "build", "--platform", "linux/amd64"]
+        assert "--isolation=chroot" in cmd
+        build_arg_pairs = list(zip(cmd, cmd[1:], strict=False))
+        assert ("--build-arg", "https_proxy=http://proxy.example:3128") in build_arg_pairs
+        assert ("--build-arg", "AGENTIX_BUILDER_BASE=ghcr.io/nixos/nix:latest") in build_arg_pairs
+        assert (
+            "--build-arg",
+            "AGENTIX_NIX_SUBSTITUTERS=https://mirrors.tencent.com/nix-channels/store",
+        ) in build_arg_pairs
+        assert "buildx" not in cmd
+        assert "--load" not in cmd
+
 
 # ── build: tar bundle artifacts ────────────────────────────────────
 
@@ -546,6 +585,48 @@ class TestTarBundle:
         assert (tmp_path / "nix" / "runtime" / "bootstrap.sh").is_file()
         assert (tmp_path / "nix" / "runtime").stat().st_mode & 0o777 == 0o555
 
+    def test_copy_nix_from_image_uses_configured_container_runner(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls: list[list[str]] = []
+        payload = io.BytesIO()
+        with tarfile.open(fileobj=payload, mode="w") as tar:
+            data = b"#!/bin/sh\n"
+            info = tarfile.TarInfo("nix/runtime/bootstrap.sh")
+            info.mode = 0o755
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+        class FakeProc:
+            def __init__(self, cmd: list[str], stdout: object, stderr: object) -> None:
+                del stdout, stderr
+                self.stdout = io.BytesIO(payload.getvalue())
+                self.returncode = 0
+                calls.append(cmd)
+
+            def wait(self) -> int:
+                return self.returncode
+
+        def fake_popen(cmd: list[str], *, stdout: object, stderr: object) -> FakeProc:
+            return FakeProc(cmd, stdout, stderr)
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        bundle._copy_nix_from_image(
+            "tmp:latest",
+            tmp_path,
+            platform="linux/amd64",
+            config=docker.ContainerBuildConfig(
+                container_bin="podman",
+                container_run_args=("--runtime=crun", "--cgroups=disabled"),
+            ),
+        )
+
+        create = calls[0]
+        assert create[:6] == ["podman", "run", "--rm", "--platform", "linux/amd64", "--runtime=crun"]
+        assert "--cgroups=disabled" in create
+
     def test_copy_nix_from_image_rejects_tar_members_outside_nix(
         self,
         tmp_path: Path,
@@ -583,14 +664,21 @@ class TestTarBundle:
             tags: list[str],
             project_subpath: Path,
             platform: str,
+            config: docker.ContainerBuildConfig | None = None,
         ) -> None:
-            del project_subpath, platform
+            del project_subpath, platform, config
             built_tags.append(tags)
 
         monkeypatch.setattr(bundle, "_docker_build_image", fake_build_image)
 
-        def fake_copy_nix(_image_ref: str, bundle_root: Path, *, platform: str) -> None:
-            del platform
+        def fake_copy_nix(
+            _image_ref: str,
+            bundle_root: Path,
+            *,
+            platform: str,
+            config: docker.ContainerBuildConfig | None = None,
+        ) -> None:
+            del platform, config
             copied_refs.append(_image_ref)
             runtime = bundle_root / "nix" / "runtime"
             runtime.mkdir(parents=True)
@@ -671,7 +759,9 @@ class TestMainBuildFormats:
             tag: str,
             project_subpath: Path,
             platform: str,
+            config: docker.ContainerBuildConfig | None = None,
         ) -> Path:
+            del config
             calls.append(output_path)
             assert stage.is_dir()
             assert name == "demo-agent"
@@ -700,7 +790,9 @@ class TestMainBuildFormats:
             tag: str,
             project_subpath: Path,
             platform: str,
+            config: docker.ContainerBuildConfig | None = None,
         ) -> str:
+            del config
             assert stage.is_dir()
             assert name == "demo"
             assert tag == "dev"
@@ -717,6 +809,62 @@ class TestMainBuildFormats:
 
         assert build.main([str(proj), "--name", "demo:dev", "--format", "oci-image"]) == 0
         assert calls == ["demo:dev"]
+
+    def test_oci_image_build_accepts_container_cli_options(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        proj = _make_project(tmp_path / "proj")
+        configs: list[docker.ContainerBuildConfig | None] = []
+
+        def fake_docker_build(
+            stage: Path,
+            *,
+            name: str,
+            tag: str,
+            project_subpath: Path,
+            platform: str,
+            config: docker.ContainerBuildConfig | None = None,
+        ) -> str:
+            del stage, name, tag, project_subpath, platform
+            configs.append(config)
+            return "demo:dev"
+
+        def boom_tar(*_a: object, **_k: object) -> Path:
+            raise AssertionError("oci-image format must not build a bundle tar")
+
+        monkeypatch.setattr(build, "_docker_build", fake_docker_build)
+        monkeypatch.setattr(build, "_build_tar_bundle", boom_tar)
+
+        assert (
+            build.main(
+                [
+                    str(proj),
+                    "--name",
+                    "demo:dev",
+                    "--format",
+                    "oci-image",
+                    "--container-bin",
+                    "podman",
+                    "--container-arg",
+                    "--isolation=chroot",
+                    "--builder-base",
+                    "ghcr.io/nixos/nix:latest",
+                    "--nix-substituter",
+                    "https://mirrors.tencent.com/nix-channels/store",
+                ]
+            )
+            == 0
+        )
+        assert configs == [
+            docker.ContainerBuildConfig(
+                container_bin="podman",
+                container_args=("--isolation=chroot",),
+                builder_base="ghcr.io/nixos/nix:latest",
+                nix_substituters=("https://mirrors.tencent.com/nix-channels/store",),
+            )
+        ]
 
 
 # ── build: error paths ─────────────────────────────────────────────

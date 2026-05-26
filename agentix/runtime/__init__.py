@@ -47,8 +47,12 @@ BIND_PORT_ENV = "AGENTIX_BIND_PORT"
 """Env var the bundle's bootstrap script reads to choose its listen
 port. Backends pick a free host port and pass it via this name."""
 
+BIND_HOST_ENV = "AGENTIX_BIND_HOST"
+"""Env var the bundle's bootstrap script reads to choose its listen host."""
+
 
 __all__ = [
+    "BIND_HOST_ENV",
     "BIND_PORT_ENV",
     "BUNDLE_NIX_ROOT",
     "BUNDLE_RUNTIME_ENTRYPOINT",
