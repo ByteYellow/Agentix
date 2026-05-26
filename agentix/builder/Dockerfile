@@ -1,10 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# agentix bundle builder. The produced image is a *runtime carrier*:
-# its `/nix` holds everything a sandbox needs. Deployment backends make
-# that tree visible in the task container at `/nix`; the Docker-compatible
-# backend does this through a stopped carrier container plus
-# `--volumes-from`.
+# agentix bundle builder. The transient build image contains `/nix`
+# with everything a sandbox needs. The host build command copies that
+# tree into the portable bundle tar; deployment backends later make the
+# same tree visible in the task container at `/nix`.
 #
 #   /nix/store/...              the closures (interpreter, uv, system deps)
 #   /nix/runtime/venv           the uv venv — all Python deps

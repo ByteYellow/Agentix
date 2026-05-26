@@ -1,18 +1,17 @@
 """Build the portable Agentix bundle tar artifact.
 
-A bundle is the `--format tar` deliverable of `agentix build`. Its
-layout is fixed and host-portable:
+A bundle is the deliverable of `agentix build`. Its layout is fixed and
+host-portable:
 
     manifest.json          bundle identity + runtime contract
     nix/store/...          the closures: interpreter, uv, system deps
     nix/runtime/venv       the uv venv (all Python deps)
     nix/runtime/{bin,...}  symlinkJoin of every closure
 
-The bundle is produced indirectly: the same Dockerfile that powers
-`--format oci-image` runs inside a transient cache image, and this
-module streams `/nix` out of that image (`docker run --entrypoint tar`
-... | tarfile.open`), validates the runtime tree's symlinks, hashes
-the result for content identity, and writes a portable tar.
+The bundle is produced indirectly: the builder Dockerfile runs inside a
+transient cache image, and this module exports a stopped container created
+from that image, extracts only `nix/`, validates the runtime tree's symlinks,
+hashes the result for content identity, and writes a portable tar.
 
 Symlink validation is deliberately narrow — only `/nix/runtime` is
 audited, since that's the surface deployments execute. `/nix/store`
@@ -26,6 +25,7 @@ import hashlib
 import json
 import os
 import posixpath
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -33,7 +33,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from uuid import uuid4
 
-from agentix.cli.build.docker import ContainerBuildConfig, _build_container_run_args, _docker_build_image
+from agentix.cli.build.docker import ContainerBuildConfig, _build_container_run_args, _docker_build_image, _run
 from agentix.cli.build.naming import _tar_cache_image_ref
 from agentix.cli.build.platform import nix_system_for_platform, normalize_platform
 
@@ -164,13 +164,31 @@ def _write_bundle_tar(bundle_root: Path, output_path: Path) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
-def _checked_nix_member_name(name: str) -> str:
+def _nix_export_member_name(name: str) -> str | None:
     normalized = posixpath.normpath(name)
-    if normalized in {"", "."} or normalized.startswith("/") or normalized == ".." or normalized.startswith("../"):
-        raise SystemExit(f"bundle image produced unsafe tar member: {name!r}")
-    if normalized != "nix" and not normalized.startswith("nix/"):
-        raise SystemExit(f"bundle image produced non-/nix tar member: {name!r}")
-    return normalized
+    if normalized in {"", ".", ".."} or normalized.startswith("/") or normalized.startswith("../"):
+        raise SystemExit(f"builder output produced unsafe tar member: {name!r}")
+    if normalized == "nix" or normalized.startswith("nix/"):
+        return normalized
+    return None
+
+
+def _ensure_safe_parent(root: Path, path: Path) -> None:
+    current = root
+    for part in path.parent.relative_to(root).parts:
+        current = current / part
+        if os.path.lexists(current):
+            if current.is_symlink() or not current.is_dir():
+                raise SystemExit(f"builder output produced unsafe parent path: {current.relative_to(root)}")
+        else:
+            current.mkdir()
+
+
+def _remove_existing_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif os.path.lexists(path):
+        path.unlink()
 
 
 def _extract_nix_member(
@@ -179,14 +197,81 @@ def _extract_nix_member(
     bundle_root: Path,
     deferred_dirs: list[tuple[Path, int]],
 ) -> None:
-    member.name = _checked_nix_member_name(member.name)
-    if member.islnk():
-        _checked_nix_member_name(member.linkname)
+    name = _nix_export_member_name(member.name)
+    if name is None:
+        return
+
+    target = bundle_root / name
+    _ensure_safe_parent(bundle_root, target)
     if member.isdir():
-        original_mode = member.mode
-        deferred_dirs.append((bundle_root / member.name, original_mode))
-        member.mode = original_mode | 0o700
-    tar.extract(member, bundle_root)
+        if os.path.lexists(target):
+            if target.is_symlink() or not target.is_dir():
+                raise SystemExit(f"builder output cannot replace non-directory with directory: {name}")
+        else:
+            target.mkdir()
+        deferred_dirs.append((target, member.mode & 0o7777))
+        return
+
+    _remove_existing_path(target)
+    if member.issym():
+        os.symlink(member.linkname, target)
+        return
+    if member.islnk():
+        link_name = _nix_export_member_name(member.linkname)
+        if link_name is None:
+            raise SystemExit(f"builder output produced hard link outside /nix: {member.linkname!r}")
+        os.link(bundle_root / link_name, target)
+        return
+    if member.isfile():
+        source = tar.extractfile(member)
+        if source is None:
+            raise SystemExit(f"builder output produced unreadable tar member: {name}")
+        with source, target.open("wb") as f:
+            shutil.copyfileobj(source, f)
+        os.chmod(target, member.mode & 0o7777)
+        return
+
+    raise SystemExit(f"builder output produced unsupported tar member: {name}")
+
+
+def _export_nix_from_container(
+    container: str,
+    bundle_root: Path,
+    *,
+    config: ContainerBuildConfig,
+) -> None:
+    bin_name = config.container_bin
+    cmd = [bin_name, "export", container]
+    print(f"$ {' '.join(cmd)}", file=sys.stderr)
+    with TemporaryFile() as stderr:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+        )
+        if proc.stdout is None:
+            raise SystemExit(f"{bin_name} export did not provide a stdout pipe")
+        deferred_dirs: list[tuple[Path, int]] = []
+        try:
+            try:
+                with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
+                    for member in tar:
+                        _extract_nix_member(tar, member, bundle_root, deferred_dirs)
+            except tarfile.TarError as exc:
+                proc.wait()
+                stderr.seek(0)
+                message = stderr.read().decode(errors="replace")
+                raise SystemExit(message or f"{bin_name} export produced an invalid tar stream: {exc}") from exc
+        finally:
+            proc.stdout.close()
+        rc = proc.wait()
+        if rc != 0:
+            stderr.seek(0)
+            message = stderr.read().decode(errors="replace")
+            raise SystemExit(message or rc)
+
+    for path, mode in sorted(deferred_dirs, key=lambda item: len(item[0].parts), reverse=True):
+        os.chmod(path, mode)
 
 
 def _copy_nix_from_image(
@@ -198,45 +283,24 @@ def _copy_nix_from_image(
 ) -> None:
     config = config or ContainerBuildConfig()
     bin_name = config.container_bin
-    cmd = [
+    container = f"agentix-bundle-copy-{uuid4().hex[:12]}"
+    create_cmd = [
         bin_name,
-        "run",
-        "--rm",
+        "create",
         "--platform",
         normalize_platform(platform),
+        "--network",
+        "none",
         *_build_container_run_args(config),
-        "--entrypoint",
-        "tar",
+        "--name",
+        container,
         image_ref,
-        "-C",
-        "/",
-        "-cf",
-        "-",
-        "nix",
     ]
-    print(f"$ {' '.join(cmd)}", file=sys.stderr)
-    with TemporaryFile() as stderr:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=stderr,
-        )
-        if proc.stdout is None:
-            raise SystemExit(f"{bin_name} run did not provide a stdout pipe")
-        deferred_dirs: list[tuple[Path, int]] = []
-        try:
-            with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
-                for member in tar:
-                    _extract_nix_member(tar, member, bundle_root, deferred_dirs)
-        finally:
-            proc.stdout.close()
-        rc = proc.wait()
-        if rc != 0:
-            stderr.seek(0)
-            message = stderr.read().decode(errors="replace")
-            raise SystemExit(message or rc)
-    for path, mode in sorted(deferred_dirs, key=lambda item: len(item[0].parts), reverse=True):
-        os.chmod(path, mode)
+    try:
+        _run(create_cmd)
+        _export_nix_from_container(container, bundle_root, config=config)
+    finally:
+        _run([bin_name, "rm", "-f", container], check=False)
 
 
 def _build_tar_bundle(

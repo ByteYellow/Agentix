@@ -13,8 +13,9 @@ microservice per pairing.
 ```bash
 cd examples/hello-agentix
 uv sync
-uv run agentix build . --name hello-agentix --format oci-image
-uv run python run.py
+uv run agentix build . --name hello-agentix --output dist/hello-agentix.bundle.tar
+BUNDLE=$(uv run agentix deploy docker dist/hello-agentix.bundle.tar | awk -F' -> ' '/^bundle -> /{print $2}')
+uv run python run.py --bundle "$BUNDLE"
 ```
 
 ```python
@@ -24,7 +25,7 @@ from agentix.deployment.docker import DockerDeployment
 
 config = SandboxConfig(
     image="python:3.13-slim",
-    bundle="hello-agentix:0.1.0",
+    bundle="/home/me/.cache/agentix/bundles/sha256-...",
 )
 async with session(DockerDeployment(), config) as sandbox:
     async with RuntimeClient(sandbox.runtime_url) as client:
@@ -99,8 +100,9 @@ Start with the complete runnable demo in
 [`agentix-cookbook/examples/hello-agentix`](https://github.com/Agentiix/agentix-cookbook/tree/main/examples/hello-agentix):
 
 ```bash
-uv run agentix build . --name hello-agentix --format oci-image
-uv run python run.py
+uv run agentix build . --name hello-agentix --output dist/hello-agentix.bundle.tar
+BUNDLE=$(uv run agentix deploy docker dist/hello-agentix.bundle.tar | awk -F' -> ' '/^bundle -> /{print $2}')
+uv run python run.py --bundle "$BUNDLE"
 ```
 
 This SWE-bench-shaped flow composes three independent packages in one

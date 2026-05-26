@@ -12,7 +12,8 @@ deploy-ready bundle. The default output is a portable tar containing
 `manifest.json` and the complete `nix/` runtime tree.
 
 ```bash
-agentix build ./my-rollout --name my-rollout:0.1.0 --format oci-image
+agentix build ./my-rollout --name my-rollout:0.1.0 --output dist/my-rollout.bundle.tar
+agentix deploy docker dist/my-rollout.bundle.tar
 ```
 
 ## What Goes In

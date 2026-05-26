@@ -30,7 +30,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import NewType, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
@@ -97,9 +98,11 @@ class SandboxConfig(BaseModel):
         "(e.g. `swebench/task-django__django-12345:latest`).",
     )
     bundle: str = Field(
-        description="Agentix runtime bundle ref produced by `agentix build`, "
-        "e.g. `my-agent:0.1.0` for Docker-compatible image bundles or a "
-        "backend-specific staged bundle reference.",
+        description=(
+            "Backend-specific Agentix runtime bundle ref. `agentix build` "
+            "produces the portable tar; `agentix deploy <backend>` "
+            "materializes it into this ref when the backend needs staging."
+        ),
     )
     platform: str | None = Field(
         default=None,
@@ -120,6 +123,15 @@ class SandboxInfo(BaseModel):
     sandbox_id: SandboxId
     runtime_url: str
     status: str = "running"
+
+
+@dataclass
+class MaterializedBundle:
+    """Backend-specific bundle reference produced by `agentix deploy`."""
+
+    bundle: str
+    platform: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -145,6 +157,26 @@ class Deployment(Protocol):
     async def create(self, config: SandboxConfig) -> Sandbox: ...
     async def delete(self, sandbox_id: SandboxId) -> None: ...
     async def get(self, sandbox_id: SandboxId) -> SandboxInfo: ...
+
+
+@runtime_checkable
+class BundleMaterializer(Protocol):
+    """Optional deployment backend hook for `agentix deploy`.
+
+    `agentix build` produces the backend-neutral tar bundle. A materializer
+    turns that portable artifact into the backend-native reference that
+    `SandboxConfig.bundle` should carry for later sandbox creation. That
+    reference is backend-side state; the sandbox still sees the runtime
+    at the fixed in-container path `/nix`.
+    """
+
+    async def materialize_bundle(
+        self,
+        bundle: Path,
+        *,
+        name: str | None = None,
+        platform: str | None = None,
+    ) -> MaterializedBundle: ...
 
 
 # The plugin registry — one `agentix.deployment` group. Backend dists add

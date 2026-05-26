@@ -3,25 +3,62 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
+import tarfile
+from pathlib import Path
 
 import agentix.deployment.docker as docker_mod
 import pytest
-from agentix.deployment.docker import DockerDeployment, DockerDeploymentConfig
+from agentix.deployment.docker import DockerDeployment, DockerDeploymentConfig, PodmanDeployment
 
 from agentix.deployment.base import SandboxConfig, SandboxResource
 
 
-def test_carrier_name_includes_platform() -> None:
-    amd64 = docker_mod._carrier_name("bundle:pytest", "linux/amd64")
-    arm64 = docker_mod._carrier_name("bundle:pytest", "linux/arm64")
+def _bundle_tar(tmp_path: Path) -> Path:
+    path = tmp_path / "bundle.tar"
+    manifest = {
+        "schema_version": 1,
+        "format": "agentix-bundle",
+        "name": "demo",
+        "tag": "1.0.0",
+        "platform": "linux/amd64",
+        "digest": "sha256:" + "a" * 64,
+        "runtime_env": {"PATH": "/nix/runtime/venv/bin:/nix/runtime/bin"},
+        "agentix_added_env": {"AGENTIX_ADDED_PATH": "/nix/runtime/venv/bin:/nix/runtime/bin"},
+    }
+    with tarfile.open(path, "w") as tar:
+        manifest_bytes = json.dumps(manifest).encode()
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(manifest_bytes)
+        tar.addfile(info, io.BytesIO(manifest_bytes))
+        for name in ("nix", "nix/runtime"):
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.DIRTYPE
+            tar.addfile(info)
+        bootstrap = b"#!/bin/sh\n"
+        info = tarfile.TarInfo("nix/runtime/bootstrap.sh")
+        info.mode = 0o755
+        info.size = len(bootstrap)
+        tar.addfile(info, io.BytesIO(bootstrap))
+    return path
 
-    assert amd64 != arm64
-    assert docker_mod._carrier_name("bundle:pytest") == docker_mod._carrier_name("bundle:pytest")
+
+def _materialized_bundle(tmp_path: Path) -> Path:
+    root = tmp_path / "bundle-cache" / "sha256-test"
+    nix = root / "nix" / "runtime"
+    nix.mkdir(parents=True)
+    (nix / "bootstrap.sh").write_text("#!/bin/sh\n")
+    return root
 
 
 @pytest.mark.asyncio
-async def test_create_passes_platform_to_carrier_and_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_passes_platform_and_bundle_mount_to_sandbox(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, ...]] = []
+    materialized = _materialized_bundle(tmp_path)
 
     async def fake_docker(
         *args: str,
@@ -46,40 +83,38 @@ async def test_create_passes_platform_to_carrier_and_sandbox(monkeypatch: pytest
     await deployment.create(
         SandboxConfig(
             image="python:3.13-slim",
-            bundle="bundle:pytest",
+            bundle=str(materialized),
             platform="linux/amd64",
         )
     )
 
-    create_call = next(call for call in calls if call[0] == "create")
-    start_call = next(call for call in calls if call[0] == "start")
     run_call = next(call for call in calls if call[0] == "run")
 
-    assert create_call[1:3] == ("--platform", "linux/amd64")
-    assert create_call[-3:] == ("bundle:pytest", "-c", "true")
-    assert create_call[create_call.index("--entrypoint") + 1] == "/bin/sh"
-    assert start_call[1:] == ("-a", docker_mod._carrier_name("bundle:pytest", "linux/amd64"))
+    assert not any(call[0] == "create" for call in calls)
+    assert not any(call[0] == "start" for call in calls)
     assert run_call[1:3] == ("--platform", "linux/amd64")
     assert run_call[run_call.index("-p") + 1] == "127.0.0.1:18000:18000"
     assert "--network" not in run_call
-    # The bundle's own /nix/runtime/bootstrap.sh is the container entry
-    # point — no more `-c '<inline bootstrap>'` indirection. The script
-    # ships with the bundle (built by `agentix/builder/bundle-build.sh`
-    # from `agentix/builder/bootstrap.sh`). The path lives on
-    # `agentix.runtime.BUNDLE_RUNTIME_ENTRYPOINT` so every backend reads
-    # the same constant — it's the runtime's contract, not any one
-    # backend's convention.
+    # The bundle's /nix/runtime/bootstrap.sh is the runtime contract,
+    # so every backend reads the same entrypoint constant.
     from agentix.runtime import BUNDLE_RUNTIME_ENTRYPOINT
 
     assert run_call[-1] == "python:3.13-slim"
     assert "-c" not in run_call
+    assert run_call[run_call.index("--mount") + 1] == (
+        f"type=bind,source={(materialized / 'nix').resolve()},target=/nix,readonly"
+    )
     assert run_call[run_call.index("--entrypoint") + 1] == BUNDLE_RUNTIME_ENTRYPOINT
     assert BUNDLE_RUNTIME_ENTRYPOINT == "/nix/runtime/bootstrap.sh"
 
 
 @pytest.mark.asyncio
-async def test_create_passes_resource_limits_and_extra_runner_args(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_passes_resource_limits_and_extra_runner_args(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, ...]] = []
+    materialized = _materialized_bundle(tmp_path)
 
     async def fake_docker(
         *args: str,
@@ -102,24 +137,20 @@ async def test_create_passes_resource_limits_and_extra_runner_args(monkeypatch: 
 
     deployment = DockerDeployment(
         DockerDeploymentConfig(
-            create_args=["--pull=never"],
             run_args=["--runtime=crun", "--cgroups=disabled"],
         )
     )
     await deployment.create(
         SandboxConfig(
             image="python:3.13-slim",
-            bundle="bundle:pytest",
+            bundle=str(materialized),
             resource=SandboxResource(cpu=4, memory="16g", gpu=2),
         )
     )
 
-    create_call = next(call for call in calls if call[0] == "create")
     run_call = next(call for call in calls if call[0] == "run")
 
-    assert "--pull=never" in create_call
-    assert "--runtime=crun" in create_call
-    assert "--cgroups=disabled" in create_call
+    assert not any(call[0] == "create" for call in calls)
     assert run_call[run_call.index("--cpus") + 1] == "4"
     assert run_call[run_call.index("--memory") + 1] == "16g"
     assert run_call[run_call.index("--gpus") + 1] == "2"
@@ -128,8 +159,12 @@ async def test_create_passes_resource_limits_and_extra_runner_args(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_host_network_binds_runtime_to_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_host_network_binds_runtime_to_loopback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, ...]] = []
+    materialized = _materialized_bundle(tmp_path)
 
     async def fake_docker(
         *args: str,
@@ -151,7 +186,7 @@ async def test_host_network_binds_runtime_to_loopback(monkeypatch: pytest.Monkey
     monkeypatch.setattr(DockerDeployment, "_wait_healthy", fake_wait_healthy)
 
     deployment = DockerDeployment(DockerDeploymentConfig(network="host"))
-    await deployment.create(SandboxConfig(image="python:3.13-slim", bundle="bundle:pytest"))
+    await deployment.create(SandboxConfig(image="python:3.13-slim", bundle=str(materialized)))
 
     run_call = next(call for call in calls if call[0] == "run")
     assert "--network" in run_call
@@ -215,46 +250,37 @@ async def test_container_bin_config_selects_podman(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_carrier_recreated_when_runtime_tag_moves(monkeypatch: pytest.MonkeyPatch) -> None:
-    carrier = docker_mod._carrier_name("bundle:pytest", "linux/amd64")
-    calls: list[tuple[str, ...]] = []
+async def test_materialize_bundle_extracts_tar_to_cache(
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle_tar(tmp_path)
+    cache = tmp_path / "cache"
 
-    async def fake_docker(
-        *args: str,
-        config: DockerDeploymentConfig | None = None,
-        check: bool = True,
-        retries: int = 0,
-    ) -> tuple[int, bytes, bytes]:
-        del config, check, retries
-        calls.append(args)
-        if args == ("inspect", carrier):
-            return 0, b"", b""
-        if args == ("inspect", "-f", "{{.Image}}", carrier):
-            return 0, b"sha256:old\n", b""
-        if args == ("image", "inspect", "-f", "{{.Id}}", "bundle:pytest"):
-            return 0, b"sha256:new\n", b""
-        return 0, b"", b""
+    deployment = DockerDeployment(DockerDeploymentConfig(bundle_cache_dir=cache))
+    result = await deployment.materialize_bundle(bundle, name="localhost/demo:dev")
 
-    monkeypatch.setattr(docker_mod, "_docker", fake_docker)
+    expected = cache / f"sha256-{'a' * 64}"
+    assert result.bundle == str(expected)
+    assert result.platform == "linux/amd64"
+    assert result.metadata["cache"] == str(expected)
+    assert result.metadata["name"] == "localhost/demo:dev"
+    assert (expected / "manifest.json").is_file()
+    assert (expected / "nix" / "runtime" / "bootstrap.sh").is_file()
 
-    deployment = DockerDeployment()
-    assert await deployment._ensure_carrier("bundle:pytest", "linux/amd64") == carrier
 
-    rm_call = calls.index(("rm", "-f", carrier))
-    create_call = calls.index(
-        (
-            "create",
-            "--platform",
-            "linux/amd64",
-            "--name",
-            carrier,
-            "--entrypoint",
-            "/bin/sh",
-            "bundle:pytest",
-            "-c",
-            "true",
-        )
+@pytest.mark.asyncio
+async def test_materialize_bundle_defaults_image_ref_from_manifest(
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle_tar(tmp_path)
+    result = await DockerDeployment(DockerDeploymentConfig(bundle_cache_dir=tmp_path / "cache")).materialize_bundle(
+        bundle
     )
-    start_call = calls.index(("start", "-a", carrier))
-    assert rm_call < create_call
-    assert create_call < start_call
+
+    assert result.metadata["name"] == "demo:1.0.0"
+
+
+def test_podman_deployment_uses_podman_by_default() -> None:
+    deployment = PodmanDeployment()
+
+    assert deployment._deployment.config.container_bin == "podman"

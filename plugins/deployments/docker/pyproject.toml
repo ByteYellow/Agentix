@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agentix-deployment-docker"
 version = "0.1.4"
-description = "Docker deployment backend for Agentix (registers the `local` backend)"
+description = "Docker/Podman deployment backend for Agentix"
 requires-python = ">=3.11"
 dependencies = [
     # Protocol + dataclasses (`Deployment`, `Sandbox`, `SandboxConfig`,
@@ -20,10 +20,12 @@ dependencies = [
 [tool.uv.sources]
 agentixx = { workspace = true }
 
-# `uv sync` makes `load_deployment("local")` work with zero framework
-# changes — the registry walks this entry-point group.
+# `uv sync` makes `load_deployment("docker")` and
+# `load_deployment("podman")` work with zero framework changes — the
+# registry walks this entry-point group.
 [project.entry-points."agentix.deployment"]
-local = "agentix.deployment.docker:DockerDeployment"
+docker = "agentix.deployment.docker:DockerDeployment"
+podman = "agentix.deployment.docker:PodmanDeployment"
 
 [tool.hatch.build.targets.wheel]
 # One file at `agentix/deployment/docker.py`. The `agentix` and

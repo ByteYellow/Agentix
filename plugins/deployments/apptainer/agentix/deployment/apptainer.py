@@ -7,7 +7,7 @@ friendly.
 Two artifacts, one container, same contract as `DockerDeployment`:
 
   - `config.bundle` is the portable tar bundle produced by
-    `agentix build --format tar`. Its `nix/` tree is extracted once per
+    `agentix build`. Its `nix/` tree is extracted once per
     bundle digest under a host scratch dir and reused across sandboxes.
   - `config.image` is an apptainer-native task image reference
     (`docker://...`, `library://...`, `oras://...`, or a local `.sif`).

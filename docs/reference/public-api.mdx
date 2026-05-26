@@ -66,10 +66,10 @@ Core deployment lifecycle:
 ```python
 from agentix import SandboxConfig, load_deployment, session
 
-deployment_cls = load_deployment("local")
+deployment_cls = load_deployment("docker")
 deployment = deployment_cls()
 
-config = SandboxConfig(image="python:3.13-slim", bundle="my-bundle:0.1.0")
+config = SandboxConfig(image="python:3.13-slim", bundle="/home/me/.cache/agentix/bundles/sha256-...")
 async with session(deployment, config) as sandbox:
     ...
 ```

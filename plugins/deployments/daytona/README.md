@@ -19,7 +19,7 @@ Set `DAYTONA_API_KEY` in the environment.
 ## Use
 
 ```bash
-agentix deploy daytona --image my-agent:0.1.0
+agentix deploy daytona dist/my-agent.bundle.tar
 ```
 
 ```python
@@ -27,7 +27,7 @@ from agentix import RuntimeClient, SandboxConfig
 from agentix.deployment.daytona import DaytonaDeployment
 
 async with DaytonaDeployment().lifecycle(
-    SandboxConfig(image="python:3.13-slim", bundle="my-agent:0.1.0")
+    SandboxConfig(image="python:3.13-slim", bundle="<backend bundle ref>")
 ) as sandbox:
     async with RuntimeClient(sandbox.runtime_url) as c:
         ...

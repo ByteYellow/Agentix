@@ -12,7 +12,6 @@ container is tested.
 
 from __future__ import annotations
 
-import io
 import subprocess
 import tarfile
 from pathlib import Path
@@ -365,24 +364,23 @@ class TestStageContext:
 
 
 class TestDockerBuild:
-    def test_docker_build_passes_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_docker_build_image_passes_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[list[str]] = []
 
         def _fake_run(cmd: list[str], *, cwd: Path | None = None, capture: bool = False) -> subprocess.CompletedProcess:
+            del cwd, capture
             calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 0)
 
         monkeypatch.setattr(docker, "_run", _fake_run)
 
-        ref = build._docker_build(
+        docker._docker_build_image(
             tmp_path,
-            name="demo",
-            tag="1.0.0",
+            tags=["demo:1.0.0"],
             project_subpath=Path("."),
             platform="linux/amd64",
         )
 
-        assert ref == "demo:1.0.0"
         cmd = calls[0]
         assert cmd[:4] == ["docker", "buildx", "build", "--platform"]
         assert cmd[4] == "linux/amd64"
@@ -543,47 +541,46 @@ class TestTarBundle:
         assert manifest["entrypoint"] == "/nix/runtime/bootstrap.sh"
         assert manifest["runtime_env"]["PATH"] == "/nix/runtime/venv/bin:/nix/runtime/bin"  # type: ignore[index]
 
-    def test_copy_nix_from_image_streams_tar_with_platform(
+    def test_copy_nix_from_image_copies_from_stopped_container_with_platform(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         calls: list[list[str]] = []
 
-        payload = io.BytesIO()
-        with tarfile.open(fileobj=payload, mode="w") as tar:
-            for dirname in ("nix", "nix/runtime"):
-                info = tarfile.TarInfo(dirname)
-                info.type = tarfile.DIRTYPE
-                info.mode = 0o555
-                tar.addfile(info)
-            data = b"#!/bin/sh\n"
-            info = tarfile.TarInfo("nix/runtime/bootstrap.sh")
-            info.mode = 0o755
-            info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
+        def fake_run(
+            cmd: list[str],
+            *,
+            cwd: Path | None = None,
+            capture: bool = False,
+            check: bool = True,
+        ) -> subprocess.CompletedProcess:
+            del cwd, capture, check
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
 
-        class FakeProc:
-            def __init__(self, cmd: list[str], stdout: object, stderr: object) -> None:
-                del stdout, stderr
-                self.stdout = io.BytesIO(payload.getvalue())
-                self.returncode = 0
-                calls.append(cmd)
+        def fake_export(
+            container: str,
+            bundle_root: Path,
+            *,
+            config: docker.ContainerBuildConfig,
+        ) -> None:
+            del config
+            calls.append(["export", container])
+            (bundle_root / "nix" / "runtime").mkdir(parents=True)
+            (bundle_root / "nix" / "runtime" / "bootstrap.sh").write_text("#!/bin/sh\n")
 
-            def wait(self) -> int:
-                return self.returncode
-
-        def fake_popen(cmd: list[str], *, stdout: object, stderr: object) -> FakeProc:
-            return FakeProc(cmd, stdout, stderr)
-
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(bundle, "_run", fake_run)
+        monkeypatch.setattr(bundle, "_export_nix_from_container", fake_export)
         bundle._copy_nix_from_image("tmp:latest", tmp_path, platform="linux/amd64")
 
         create = calls[0]
-        assert create[:6] == ["docker", "run", "--rm", "--platform", "linux/amd64", "--entrypoint"]
-        assert create[-5:] == ["-C", "/", "-cf", "-", "nix"]
+        container = create[create.index("--name") + 1]
+        assert create[:6] == ["docker", "create", "--platform", "linux/amd64", "--network", "none"]
+        assert create[-1] == "tmp:latest"
+        assert calls[1] == ["export", container]
+        assert calls[2] == ["docker", "rm", "-f", container]
         assert (tmp_path / "nix" / "runtime" / "bootstrap.sh").is_file()
-        assert (tmp_path / "nix" / "runtime").stat().st_mode & 0o777 == 0o555
 
     def test_copy_nix_from_image_uses_configured_container_runner(
         self,
@@ -591,28 +588,20 @@ class TestTarBundle:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         calls: list[list[str]] = []
-        payload = io.BytesIO()
-        with tarfile.open(fileobj=payload, mode="w") as tar:
-            data = b"#!/bin/sh\n"
-            info = tarfile.TarInfo("nix/runtime/bootstrap.sh")
-            info.mode = 0o755
-            info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
 
-        class FakeProc:
-            def __init__(self, cmd: list[str], stdout: object, stderr: object) -> None:
-                del stdout, stderr
-                self.stdout = io.BytesIO(payload.getvalue())
-                self.returncode = 0
-                calls.append(cmd)
+        def fake_run(
+            cmd: list[str],
+            *,
+            cwd: Path | None = None,
+            capture: bool = False,
+            check: bool = True,
+        ) -> subprocess.CompletedProcess:
+            del cwd, capture, check
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
 
-            def wait(self) -> int:
-                return self.returncode
-
-        def fake_popen(cmd: list[str], *, stdout: object, stderr: object) -> FakeProc:
-            return FakeProc(cmd, stdout, stderr)
-
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(bundle, "_run", fake_run)
+        monkeypatch.setattr(bundle, "_export_nix_from_container", lambda *args, **kwargs: None)
         bundle._copy_nix_from_image(
             "tmp:latest",
             tmp_path,
@@ -624,35 +613,38 @@ class TestTarBundle:
         )
 
         create = calls[0]
-        assert create[:6] == ["podman", "run", "--rm", "--platform", "linux/amd64", "--runtime=crun"]
+        assert create[:6] == ["podman", "create", "--platform", "linux/amd64", "--network", "none"]
+        assert "--runtime=crun" in create
         assert "--cgroups=disabled" in create
 
-    def test_copy_nix_from_image_rejects_tar_members_outside_nix(
+    def test_copy_nix_from_image_removes_container_on_copy_failure(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        payload = io.BytesIO()
-        with tarfile.open(fileobj=payload, mode="w") as tar:
-            info = tarfile.TarInfo("etc/passwd")
-            info.size = 0
-            tar.addfile(info, io.BytesIO())
+        calls: list[list[str]] = []
 
-        class FakeProc:
-            def __init__(self, cmd: list[str], stdout: object, stderr: object) -> None:
-                del cmd, stdout, stderr
-                self.stdout = io.BytesIO(payload.getvalue())
-                self.returncode = 0
+        def fake_run(
+            cmd: list[str],
+            *,
+            cwd: Path | None = None,
+            capture: bool = False,
+            check: bool = True,
+        ) -> subprocess.CompletedProcess:
+            del cwd, capture, check
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
 
-            def wait(self) -> int:
-                return self.returncode
+        def fake_export(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            raise SystemExit(23)
 
-        def fake_popen(cmd: list[str], *, stdout: object, stderr: object) -> FakeProc:
-            return FakeProc(cmd, stdout, stderr)
-
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
-        with pytest.raises(SystemExit, match="non-/nix tar member"):
+        monkeypatch.setattr(bundle, "_run", fake_run)
+        monkeypatch.setattr(bundle, "_export_nix_from_container", fake_export)
+        with pytest.raises(SystemExit, match="23"):
             bundle._copy_nix_from_image("tmp:latest", tmp_path, platform="linux/amd64")
+        container = calls[0][calls[0].index("--name") + 1]
+        assert calls[-1] == ["docker", "rm", "-f", container]
 
     def test_tar_build_keeps_cache_image(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         built_tags: list[list[str]] = []
@@ -737,17 +729,12 @@ class TestMainDryRun:
         def _boom(*_a: object, **_k: object) -> None:
             raise AssertionError("docker must not be invoked on --dry-run")
 
-        monkeypatch.setattr("agentix.cli.build._docker_build", _boom)
+        monkeypatch.setattr("agentix.cli.build._build_tar_bundle", _boom)
         assert build.main([str(proj), "--dry-run"]) == 0
 
-    def test_output_rejected_for_oci_image(self, tmp_path: Path) -> None:
-        proj = _make_project(tmp_path / "proj")
-        with pytest.raises(SystemExit, match="--output"):
-            build.main([str(proj), "--format", "oci-image", "--output", str(tmp_path / "out.tar"), "--dry-run"])
 
-
-class TestMainBuildFormats:
-    def test_default_build_format_is_tar(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+class TestMainBuild:
+    def test_build_writes_tar_bundle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         proj = _make_project(tmp_path / "proj")
         calls: list[Path] = []
 
@@ -770,47 +757,12 @@ class TestMainBuildFormats:
             assert platform in {"linux/amd64", "linux/arm64"}
             return output_path
 
-        def boom_docker(*_a: object, **_k: object) -> str:
-            raise AssertionError("default build format must not publish an OCI image")
-
         monkeypatch.setattr(build, "_build_tar_bundle", fake_tar_bundle)
-        monkeypatch.setattr(build, "_docker_build", boom_docker)
 
         assert build.main([str(proj), "--output", str(tmp_path / "bundle.tar")]) == 0
         assert calls == [tmp_path / "bundle.tar"]
 
-    def test_oci_image_format_keeps_docker_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        proj = _make_project(tmp_path / "proj")
-        calls: list[str] = []
-
-        def fake_docker_build(
-            stage: Path,
-            *,
-            name: str,
-            tag: str,
-            project_subpath: Path,
-            platform: str,
-            config: docker.ContainerBuildConfig | None = None,
-        ) -> str:
-            del config
-            assert stage.is_dir()
-            assert name == "demo"
-            assert tag == "dev"
-            assert project_subpath == Path(".")
-            assert platform in {"linux/amd64", "linux/arm64"}
-            calls.append(f"{name}:{tag}")
-            return f"{name}:{tag}"
-
-        def boom_tar(*_a: object, **_k: object) -> Path:
-            raise AssertionError("oci-image format must not build a bundle tar")
-
-        monkeypatch.setattr(build, "_docker_build", fake_docker_build)
-        monkeypatch.setattr(build, "_build_tar_bundle", boom_tar)
-
-        assert build.main([str(proj), "--name", "demo:dev", "--format", "oci-image"]) == 0
-        assert calls == ["demo:dev"]
-
-    def test_oci_image_build_accepts_container_cli_options(
+    def test_build_accepts_container_cli_options(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -818,24 +770,21 @@ class TestMainBuildFormats:
         proj = _make_project(tmp_path / "proj")
         configs: list[docker.ContainerBuildConfig | None] = []
 
-        def fake_docker_build(
+        def fake_tar_bundle(
             stage: Path,
             *,
+            output_path: Path,
             name: str,
             tag: str,
             project_subpath: Path,
             platform: str,
             config: docker.ContainerBuildConfig | None = None,
-        ) -> str:
-            del stage, name, tag, project_subpath, platform
+        ) -> Path:
+            del stage, output_path, name, tag, project_subpath, platform
             configs.append(config)
-            return "demo:dev"
+            return tmp_path / "bundle.tar"
 
-        def boom_tar(*_a: object, **_k: object) -> Path:
-            raise AssertionError("oci-image format must not build a bundle tar")
-
-        monkeypatch.setattr(build, "_docker_build", fake_docker_build)
-        monkeypatch.setattr(build, "_build_tar_bundle", boom_tar)
+        monkeypatch.setattr(build, "_build_tar_bundle", fake_tar_bundle)
 
         assert (
             build.main(
@@ -843,8 +792,6 @@ class TestMainBuildFormats:
                     str(proj),
                     "--name",
                     "demo:dev",
-                    "--format",
-                    "oci-image",
                     "--container-bin",
                     "podman",
                     "--container-arg",

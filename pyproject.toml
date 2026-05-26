@@ -49,7 +49,7 @@ agentix = "agentix.cli:main"
 # Deployment backends, agents, datasets, and runtime integrations ship
 # in their own wheels. Runtime integrations are normal Python dependencies
 # installed into the bundle.
-#   pip install agentix-deployment-docker   # registers `local`
+#   pip install agentix-deployment-docker   # registers `docker` and `podman`
 #   pip install agentix-deployment-daytona  # registers `daytona`
 #   pip install agentix-deployment-e2b      # registers `e2b`
 #   pip install agentix-agent-claude-code   # provides `agentix.agents.claude_code`

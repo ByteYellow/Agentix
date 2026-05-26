@@ -2,34 +2,22 @@
 
 Design:
 
-  Two images, one container. `config.bundle` is the generic
-  Agentix bundle from `agentix build` (carries `/nix/runtime/bin/` and
-  the full Python closure under `/nix/store/...`). `config.image` is
-  the task-specific base the workload runs against. The runtime is
-  overlaid onto the task container's `/nix` so the
-  `/nix/runtime/bootstrap.sh` entry point and its store paths resolve
-  regardless of the task image's distribution.
+  `agentix build` produces a portable tar containing `manifest.json`
+  and a full `/nix` runtime tree. `agentix deploy docker|podman`
+  materializes that tar into a content-addressed host cache directory.
+  `config.bundle` is the cache root returned by deploy; its `nix/`
+  child is bind-mounted read-only into each sandbox at `/nix`.
 
-  Overlay mechanism: a per-bundle stopped "carrier" container
-  declares the runtime's `/nix` as a VOLUME (set in the image's config
-  by `agentix build`); sandbox containers re-use it with
-  `--volumes-from <carrier>:ro`. The carrier is created and started
-  once with a harmless shell command so Podman copies the image's
-  `/nix` data into the anonymous volume without trying to run
-  `/nix/runtime/bootstrap.sh` from inside that same volume. One stopped
-  carrier per distinct bundle — they cost only metadata.
-
-  (`--mount type=image,subpath=nix` would let us skip the carrier
-  entirely with one invocation, but it is not available across the
-  Docker-compatible CLIs this backend supports. The carrier path works
-  with both Docker and Podman.)
+  Two artifacts, one container. `config.image` is the task-specific
+  base the workload runs against. The cached bundle supplies
+  `/nix/runtime/bootstrap.sh`, the Python venv, and every Nix closure.
+  No imported runtime artifact or long-lived carrier container is needed.
 
   Sandbox create:
-      docker create [--platform <platform>] --name <carrier> <bundle>
       docker run [--platform <platform>] -d --name <sid> \\
          -p 127.0.0.1:<port>:<port> \\
          -e AGENTIX_BIND_PORT=<port> \\
-         --volumes-from <carrier>:ro \\
+         --mount type=bind,source=<cache>/nix,target=/nix,readonly \\
          --entrypoint /nix/runtime/bootstrap.sh \\
          <image>
 
@@ -47,16 +35,31 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
+import os
+import posixpath
 import shlex
+import shutil
 import socket
+import tarfile
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
 
-from agentix.deployment.base import Deployment, Sandbox, SandboxConfig, SandboxId, SandboxInfo, SandboxResource
-from agentix.runtime import BIND_HOST_ENV, BIND_PORT_ENV, BUNDLE_RUNTIME_ENTRYPOINT
+from agentix.deployment.base import (
+    Deployment,
+    MaterializedBundle,
+    Sandbox,
+    SandboxConfig,
+    SandboxId,
+    SandboxInfo,
+    SandboxResource,
+)
+from agentix.runtime import BIND_HOST_ENV, BIND_PORT_ENV, BUNDLE_NIX_ROOT, BUNDLE_RUNTIME_ENTRYPOINT
 
 logger = logging.getLogger("agentix.deployment.docker")
 
@@ -75,10 +78,6 @@ class DockerDeploymentConfig(BaseModel):
         default="docker",
         description="Docker-compatible CLI binary, e.g. `docker` or `podman`.",
     )
-    create_args: list[str] = Field(
-        default_factory=list,
-        description="Extra arguments inserted after `container create` platform args.",
-    )
     run_args: list[str] = Field(
         default_factory=list,
         description="Extra arguments inserted before sandbox networking and env args.",
@@ -95,6 +94,10 @@ class DockerDeploymentConfig(BaseModel):
         default=None,
         description="Optional resource.gpu translation; args may contain `{gpu}`.",
     )
+    bundle_cache_dir: Path | None = Field(
+        default=None,
+        description="Host directory for materialized bundle caches. Default: ~/.cache/agentix/bundles.",
+    )
 
     @field_validator("container_bin")
     @classmethod
@@ -103,7 +106,7 @@ class DockerDeploymentConfig(BaseModel):
             raise ValueError("container_bin must not be empty")
         return value
 
-    @field_validator("create_args", "run_args", mode="before")
+    @field_validator("run_args", mode="before")
     @classmethod
     def _parse_extra_args(cls, value: object) -> object:
         if value is None:
@@ -179,6 +182,167 @@ def _resource_args(resource: SandboxResource | None, config: DockerDeploymentCon
     return args
 
 
+def _bundle_manifest(bundle_tar: Path) -> dict[str, object]:
+    try:
+        with tarfile.open(bundle_tar, "r:*") as tar:
+            member = tar.getmember("manifest.json")
+            f = tar.extractfile(member)
+            if f is None:
+                raise RuntimeError(f"bundle {bundle_tar} has an unreadable manifest.json")
+            manifest = json.loads(f.read().decode())
+    except (tarfile.TarError, KeyError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"bundle {bundle_tar} is not an Agentix bundle tar") from exc
+    if not isinstance(manifest, dict) or manifest.get("format") != "agentix-bundle":
+        raise RuntimeError(f"bundle {bundle_tar} manifest is not an Agentix bundle")
+    return manifest
+
+
+def _bundle_display_name(manifest: dict[str, object], name: str | None) -> str:
+    if name:
+        return name
+    bundle_name = manifest.get("name")
+    bundle_tag = manifest.get("tag")
+    if not isinstance(bundle_name, str) or not bundle_name:
+        raise RuntimeError("bundle manifest missing string field `name`")
+    if not isinstance(bundle_tag, str) or not bundle_tag:
+        return bundle_name
+    return f"{bundle_name}:{bundle_tag}"
+
+
+def _bundle_platform(manifest: dict[str, object], platform: str | None) -> str | None:
+    if platform:
+        return platform
+    manifest_platform = manifest.get("platform")
+    return manifest_platform if isinstance(manifest_platform, str) and manifest_platform else None
+
+
+def _bundle_digest(manifest: dict[str, object], bundle_tar: Path) -> str:
+    digest = manifest.get("digest")
+    if isinstance(digest, str) and digest.startswith("sha256:"):
+        value = digest.removeprefix("sha256:").lower()
+        if value and all(ch in "0123456789abcdef" for ch in value):
+            return value
+    h = hashlib.sha256()
+    with bundle_tar.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _bundle_cache_base(config: DockerDeploymentConfig | None = None) -> Path:
+    configured = _default_config(config).bundle_cache_dir
+    if configured is not None:
+        return configured.expanduser()
+    return Path.home() / ".cache" / "agentix" / "bundles"
+
+
+def _bundle_cache_root(
+    manifest: dict[str, object],
+    bundle_tar: Path,
+    config: DockerDeploymentConfig | None = None,
+) -> Path:
+    return _bundle_cache_base(config) / f"sha256-{_bundle_digest(manifest, bundle_tar)}"
+
+
+def _checked_nix_member_name(name: str) -> str:
+    normalized = posixpath.normpath(name)
+    if normalized in {"", "."} or normalized.startswith("/") or normalized == ".." or normalized.startswith("../"):
+        raise RuntimeError(f"bundle tar produced unsafe member: {name!r}")
+    if normalized != "nix" and not normalized.startswith("nix/"):
+        raise RuntimeError(f"bundle tar produced non-/nix member: {name!r}")
+    return normalized
+
+
+def _ensure_safe_parent(root: Path, path: Path) -> None:
+    current = root
+    for part in path.parent.relative_to(root).parts:
+        current = current / part
+        if os.path.lexists(current):
+            if current.is_symlink() or not current.is_dir():
+                raise RuntimeError(f"bundle tar member parent is not a directory: {current}")
+        else:
+            current.mkdir()
+
+
+def _remove_existing_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif os.path.lexists(path):
+        path.unlink()
+
+
+def _extract_nix_member(
+    tar: tarfile.TarFile,
+    member: tarfile.TarInfo,
+    root: Path,
+) -> None:
+    name = _checked_nix_member_name(member.name)
+    target = root / name
+    _ensure_safe_parent(root, target)
+
+    if member.isdir():
+        if os.path.lexists(target):
+            if target.is_symlink() or not target.is_dir():
+                raise RuntimeError(f"bundle tar cannot replace non-directory with directory: {name}")
+        else:
+            target.mkdir()
+        return
+
+    _remove_existing_path(target)
+    if member.issym():
+        os.symlink(member.linkname, target)
+        return
+    if member.islnk():
+        link_target = root / _checked_nix_member_name(member.linkname)
+        os.link(link_target, target)
+        return
+    if member.isfile():
+        source = tar.extractfile(member)
+        if source is None:
+            raise RuntimeError(f"bundle tar has unreadable file member: {name}")
+        with source, target.open("wb") as f:
+            shutil.copyfileobj(source, f)
+        os.chmod(target, member.mode & 0o7777)
+        return
+
+    raise RuntimeError(f"bundle tar contains unsupported member type: {name}")
+
+
+def _extract_bundle_to_cache(
+    bundle_tar: Path,
+    manifest: dict[str, object],
+    cache_root: Path,
+) -> None:
+    if (cache_root / "nix" / "runtime" / "bootstrap.sh").is_file():
+        return
+    cache_root.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=f".{cache_root.name}.", dir=cache_root.parent) as tmp:
+        tmp_root = Path(tmp)
+        with tarfile.open(bundle_tar, "r:*") as tar:
+            for member in tar:
+                if member.name == "manifest.json":
+                    continue
+                _extract_nix_member(tar, member, tmp_root)
+        if not (tmp_root / "nix" / "runtime" / "bootstrap.sh").is_file():
+            raise RuntimeError(f"bundle {bundle_tar} does not contain nix/runtime/bootstrap.sh")
+        (tmp_root / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        _remove_existing_path(cache_root)
+        tmp_root.replace(cache_root)
+
+
+def _bundle_nix_path(bundle: str) -> Path:
+    root = Path(bundle).expanduser().resolve()
+    nix = root / "nix"
+    if not nix.is_dir():
+        raise RuntimeError(f"materialized bundle {bundle!r} does not contain a nix/ directory")
+    return nix
+
+
+def _nix_mount_args(bundle: str) -> list[str]:
+    nix = _bundle_nix_path(bundle)
+    return ["--mount", f"type=bind,source={nix},target={BUNDLE_NIX_ROOT},readonly"]
+
+
 async def _docker(
     *args: str,
     config: DockerDeploymentConfig | None = None,
@@ -229,19 +393,33 @@ def _is_transient_docker_error(stderr: bytes) -> bool:
     )
 
 
-def _carrier_name(bundle: str, platform: str | None = None) -> str:
-    """Stable name for the stopped container that holds a runtime's /nix volume."""
-    key = f"{bundle}@{platform}" if platform else bundle
-    slug = hashlib.sha1(key.encode()).hexdigest()[:12]
-    return f"agentix-runtime-{slug}"
-
-
 class DockerDeployment(Deployment):
     """Sandbox CRUD via local Docker."""
 
     def __init__(self, config: DockerDeploymentConfig | None = None):
         self.config = _default_config(config)
         self._ports: dict[SandboxId, int] = {}  # sandbox_id → host port
+
+    async def materialize_bundle(
+        self,
+        bundle: Path,
+        *,
+        name: str | None = None,
+        platform: str | None = None,
+    ) -> MaterializedBundle:
+        bundle_tar = bundle.expanduser().resolve()
+        if not bundle_tar.is_file():
+            raise FileNotFoundError(f"bundle tar not found: {bundle}")
+        manifest = _bundle_manifest(bundle_tar)
+        bundle_name = _bundle_display_name(manifest, name)
+        materialized_platform = _bundle_platform(manifest, platform)
+        cache_root = _bundle_cache_root(manifest, bundle_tar, self.config)
+        _extract_bundle_to_cache(bundle_tar, manifest, cache_root)
+        return MaterializedBundle(
+            bundle=str(cache_root),
+            platform=materialized_platform,
+            metadata={"cache": str(cache_root), "name": bundle_name},
+        )
 
     @staticmethod
     def _allocate_port() -> int:
@@ -251,39 +429,6 @@ class DockerDeployment(Deployment):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
-
-    async def _ensure_carrier(self, bundle: str, platform: str | None) -> str:
-        """Create (if missing) a stopped container exposing bundle's /nix.
-
-        Stopped containers cost only metadata; one per distinct
-        bundle/platform is enough regardless of how many sandboxes share it.
-        """
-        carrier = _carrier_name(bundle, platform)
-        rc, _, _ = await _docker("inspect", carrier, config=self.config, check=False)
-        if rc == 0:
-            current_image = await _image_id(bundle, self.config)
-            carrier_image = await _container_image_id(carrier, self.config)
-            if current_image and carrier_image and current_image != carrier_image:
-                await _docker("rm", "-f", carrier, config=self.config, check=False)
-            else:
-                return carrier
-        platform_args = ["--platform", platform] if platform else []
-        await _docker(
-            "create",
-            *platform_args,
-            *self.config.create_args,
-            *self.config.run_args,
-            "--name",
-            carrier,
-            "--entrypoint",
-            "/bin/sh",
-            bundle,
-            "-c",
-            "true",
-            config=self.config,
-        )
-        await _docker("start", "-a", carrier, config=self.config, check=False)
-        return carrier
 
     async def create(self, config: SandboxConfig) -> Sandbox:
         sandbox_id = SandboxId(f"agentix-{uuid4().hex[:8]}")
@@ -296,7 +441,6 @@ class DockerDeployment(Deployment):
             for k, v in config.env.items():
                 env_args.extend(["-e", f"{k}={v}"])
 
-        carrier = await self._ensure_carrier(config.bundle, config.platform)
         platform_args = ["--platform", config.platform] if config.platform else []
         resource_args = _resource_args(config.resource, self.config)
         await _docker(
@@ -310,8 +454,7 @@ class DockerDeployment(Deployment):
             sandbox_id,
             *_publish_args(port, self.config),
             *env_args,
-            "--volumes-from",
-            f"{carrier}:ro",
+            *_nix_mount_args(config.bundle),
             "--entrypoint",
             BUNDLE_RUNTIME_ENTRYPOINT,
             config.image,
@@ -367,18 +510,29 @@ class DockerDeployment(Deployment):
         logger.info("Deleted sandbox %s", sandbox_id)
 
 
-async def _image_id(image: str, config: DockerDeploymentConfig | None = None) -> str | None:
-    rc, stdout, _ = await _docker("image", "inspect", "-f", "{{.Id}}", image, config=config, check=False)
-    if rc != 0:
-        return None
-    return stdout.decode().strip() or None
+class PodmanDeployment:
+    """Docker-compatible deployment configured to use the Podman CLI."""
+
+    def __init__(self, config: DockerDeploymentConfig | None = None):
+        self._deployment = DockerDeployment(config or DockerDeploymentConfig(container_bin="podman"))
+
+    async def materialize_bundle(
+        self,
+        bundle: Path,
+        *,
+        name: str | None = None,
+        platform: str | None = None,
+    ) -> MaterializedBundle:
+        return await self._deployment.materialize_bundle(bundle, name=name, platform=platform)
+
+    async def create(self, config: SandboxConfig) -> Sandbox:
+        return await self._deployment.create(config)
+
+    async def delete(self, sandbox_id: SandboxId) -> None:
+        await self._deployment.delete(sandbox_id)
+
+    async def get(self, sandbox_id: SandboxId) -> SandboxInfo:
+        return await self._deployment.get(sandbox_id)
 
 
-async def _container_image_id(container: str, config: DockerDeploymentConfig | None = None) -> str | None:
-    rc, stdout, _ = await _docker("inspect", "-f", "{{.Image}}", container, config=config, check=False)
-    if rc != 0:
-        return None
-    return stdout.decode().strip() or None
-
-
-__all__ = ["DockerDeployment", "DockerDeploymentConfig"]
+__all__ = ["DockerDeployment", "DockerDeploymentConfig", "PodmanDeployment"]

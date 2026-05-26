@@ -24,7 +24,7 @@ DEFAULT_MODEL = "openai/gpt-4.1-mini"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bundle", default="run-mini-swe-agent:0.1.0")
+    parser.add_argument("--bundle", required=True)
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument("--platform", default=None)
     parser.add_argument("--workdir", default=DEFAULT_WORKDIR)

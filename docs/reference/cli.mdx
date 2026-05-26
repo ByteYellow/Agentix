@@ -1,16 +1,19 @@
 ---
 title: CLI reference
-description: Build bundle artifacts.
+description: Build and deploy bundle artifacts.
 ---
 
-The Agentix CLI has one verb:
+The Agentix CLI has two verbs:
 
 - `agentix build` turns a Python project into a deploy-ready runtime
-  bundle.
+  bundle tar.
+- `agentix deploy` materializes that portable tar for a deployment
+  backend.
 
 ```bash
 agentix --help
 agentix build --help
+agentix deploy --help
 ```
 
 ## `agentix build`
@@ -22,8 +25,7 @@ agentix build
 agentix build path/to/project
 agentix build . --name my-rollout:0.1.0
 agentix build . --platform linux/amd64
-agentix build . --format oci-image
-agentix build . --format tar --output dist/
+agentix build . --output dist/
 agentix build . --dry-run
 ```
 
@@ -35,8 +37,7 @@ and tag are derived from `[project].name` and `[project].version`;
 | --- | --- |
 | `path` | Project root, default `.` |
 | `-n`, `--name` | Bundle `NAME` or `NAME:TAG`; bare names use `[project].version` |
-| `--format` | `tar` (default) for `manifest.json + nix/`, or `oci-image` for Docker-compatible image output |
-| `-o`, `--output` | Output file or directory for `--format tar`; defaults to `dist/<name>-<tag>-<platform>.bundle.tar` |
+| `-o`, `--output` | Output file or directory; defaults to `dist/<name>-<tag>-<platform>.bundle.tar` |
 | `--platform` | Sandbox runtime platform, `linux/amd64` or `linux/arm64`; defaults to local CPU |
 | `--dry-run` | Stage the Dockerfile and build context without running Docker |
 
@@ -76,9 +77,31 @@ Dry run stages the generated Dockerfile and copied project tree under
 `./build/<tag>/`, prints what would be built, and exits without invoking
 Docker.
 
-### Formats
+## `agentix deploy`
 
-`--format tar` is the default portable bundle format. The tar contains:
+Materialize a bundle tar for a backend:
+
+```bash
+agentix deploy docker dist/my-rollout.bundle.tar
+agentix deploy podman dist/my-rollout.bundle.tar
+```
+
+For Docker-compatible backends, deploy unpacks the portable tar into a
+content-addressed host cache and prints the cache root. Use that printed
+path as `SandboxConfig.bundle`.
+
+| Option | Meaning |
+| --- | --- |
+| `backend` | Deployment backend name, e.g. `docker` or `podman` |
+| `bundle` | Bundle tar produced by `agentix build` |
+| `-n`, `--name` | Optional backend bundle label |
+| `--platform` | Optional runtime platform; defaults to manifest platform |
+| `--container-bin` | Docker-compatible CLI override |
+| `--run-arg` | Extra argument for Docker-compatible runtime containers; repeatable |
+
+### Bundle Tar
+
+The tar contains:
 
 ```text
 manifest.json
@@ -88,26 +111,21 @@ nix/
 The `nix/` tree is the complete runtime closure and must appear at
 `/nix` inside a sandbox. Backends that stage bundles across machines can
 unpack this tar into their cache and bind it into task containers.
-The Docker carrier image used to produce the tar is kept locally under
-an `agentix-bundle-cache:*` tag and overwritten on later builds, so
-Docker/buildx can reuse it for incremental builds.
-
-`--format oci-image` preserves the Docker fast path. It loads a local
-Docker image tagged as `NAME:TAG` and `NAME:latest`, so
-`DockerDeployment` can mount the bundle's `/nix` through its carrier
-container.
+The transient build image used to produce the tar is kept locally under
+an `agentix-bundle-cache:*` tag and overwritten on later builds, so the
+container builder can reuse it for incremental builds.
 
 ## Configuration
 
-Most configuration is environment-driven so CLI and code paths stay the
-same.
+Most runtime configuration lives in explicit deployment config objects
+or CLI flags. Runtime bootstrap uses a small internal env contract.
 
 | Variable | Used by | Purpose |
 | --- | --- | --- |
 | `AGENTIX_BIND_PORT` | runtime server | Sandbox-side bind port, default `8000` |
 | `AGENTIX_UPLOAD_ROOT` | file primitive packages | Sandbox-side root for file operations |
 | `DAYTONA_API_KEY` | `daytona` backend | API authentication |
-| `E2B_API_KEY` / `E2B_TEMPLATE_ID` | `e2b` backend | API authentication and template selection |
+| `E2B_API_KEY` | `e2b` backend | API authentication |
 
 Third-party packages that need their own top-level workflow should ship a
 separate console script such as `agentix-yourcmd` instead of expanding the

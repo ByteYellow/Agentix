@@ -49,7 +49,7 @@ async def main() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bundle", default="run-claude-code:0.1.0")
+    parser.add_argument("--bundle", required=True)
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument("--platform", default=DEFAULT_PLATFORM)
     parser.add_argument("--proxy-port", type=int, default=0)

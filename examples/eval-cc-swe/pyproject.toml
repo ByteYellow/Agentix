@@ -14,7 +14,7 @@ urls = { Homepage = "https://github.com/Agentiix/Agentix" }
 dependencies = [
     "agentixx",
     "agentix-runtime-basic>=0.1.0",      # bash inside the sandbox
-    "agentix-deployment-docker>=0.1.0",  # local-docker backend
+    "agentix-deployment-docker>=0.1.0",  # docker/podman backend
     "agentix-agent-claude-code>=0.1.0",  # sandbox-side Claude Code runner
     "agentix-dataset-swe>=0.1.0",        # sandbox-side SWE-bench evaluator
     "agentix-bridge",                    # Anthropic↔OpenAI proxy across the sandbox boundary

@@ -1,9 +1,9 @@
 """Invoke a container build CLI against a staged build context.
 
 This module is intentionally narrow: a single subprocess helper that
-echoes commands and surfaces failures as `SystemExit`, plus two image
-build wrappers. Docker remains the default and uses `docker buildx
-build --load`; Podman can be selected by passing
+echoes commands and surfaces failures as `SystemExit`, plus the image
+build helper used by the tar pipeline. Docker remains the default and
+uses `docker buildx build --load`; Podman can be selected by passing
 `ContainerBuildConfig(container_bin="podman", ...)`.
 
 Heavy lifting — `uv sync`, `nix build` — happens inside the container
@@ -133,32 +133,10 @@ def _docker_build_image(
     _run(cmd)
 
 
-def _docker_build(
-    stage: Path,
-    *,
-    name: str,
-    tag: str,
-    project_subpath: Path,
-    platform: str,
-    config: ContainerBuildConfig | None = None,
-) -> str:
-    """Build the Docker-compatible bundle image; return the primary image ref.
-
-    A bare `NAME` is also tagged `NAME:latest` for convenience.
-    """
-    ref = f"{name}:{tag}"
-    tags = [ref]
-    if tag != "latest":
-        tags.append(f"{name}:latest")
-    _docker_build_image(stage, tags=tags, project_subpath=project_subpath, platform=platform, config=config)
-    return ref
-
-
 __all__ = [
     "_build_container_bin",
     "_build_container_run_args",
     "ContainerBuildConfig",
-    "_docker_build",
     "_docker_build_image",
     "_run",
 ]

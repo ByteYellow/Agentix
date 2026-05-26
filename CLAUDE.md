@@ -90,7 +90,7 @@ Agentix/                       — repo root = workspace root
 │   │   ├── pyproject.toml
 │   │   ├── agentix/bridge/
 │   │   └── tests/
-│   ├── deployment-docker/     — `agentix-deployment-docker` → `local`
+│   ├── deployment-docker/     — `agentix-deployment-docker` → `docker` + `podman`
 │   ├── deployment-daytona/    — `agentix-deployment-daytona` → `daytona`
 │   ├── deployment-e2b/        — `agentix-deployment-e2b` → `e2b`
 │   └── runtime-basic/         — `agentix-runtime-basic` → `bash` + `files`
@@ -108,7 +108,8 @@ sibling into the core `agentix/deployment/` namespace (e.g.
 file belongs to the core. The backend is wired in by its
 `[project.entry-points."agentix.deployment"]`, which the `Registry`
 discovers via `importlib.metadata` — so an editable workspace install
-makes `load_deployment("local")` work with no framework change.
+makes `load_deployment("docker")` and `load_deployment("podman")` work
+with no framework change.
 
 Dependency separation is preserved: each member has its own
 `pyproject.toml` + dependency list. The core never pulls a plugin's

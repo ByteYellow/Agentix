@@ -23,7 +23,8 @@ Agentix plugin, so build and run this example as `linux/amd64`.
 ```bash
 cd examples/run-claude-code
 uv sync
-uv run agentix build . --name run-claude-code:0.1.0 --platform linux/amd64 --format oci-image
+uv run agentix build . --name run-claude-code:0.1.0 --platform linux/amd64 --output dist/run-claude-code.bundle.tar
+BUNDLE=$(uv run agentix deploy docker dist/run-claude-code.bundle.tar --platform linux/amd64 | awk -F' -> ' '/^bundle -> /{print $2}')
 ```
 
 ## Run
@@ -34,7 +35,7 @@ Use any OpenAI-compatible endpoint:
 OPENAI_BASE_URL=https://example.com/v1 \
 OPENAI_API_KEY=sk-... \
 OPENAI_MODEL=your-model \
-uv run python main.py --bundle run-claude-code:0.1.0
+uv run python main.py --bundle "$BUNDLE"
 ```
 
 DashScope compatible-mode example:
@@ -44,7 +45,7 @@ ABRIDGE_OPENAI_EXTRA_BODY='{"enable_thinking":true}' \
 OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
 OPENAI_API_KEY=sk-... \
 OPENAI_MODEL=qwen3.7-max \
-uv run python main.py --bundle run-claude-code:0.1.0
+uv run python main.py --bundle "$BUNDLE"
 ```
 
 Optional provider-specific fields can be passed without changing the
@@ -55,7 +56,7 @@ ABRIDGE_OPENAI_EXTRA_BODY='{"enable_thinking":true}' \
 OPENAI_BASE_URL=https://example.com/v1 \
 OPENAI_API_KEY=sk-... \
 OPENAI_MODEL=your-model \
-uv run python main.py --bundle run-claude-code:0.1.0
+uv run python main.py --bundle "$BUNDLE"
 ```
 
 The example creates a tiny Git repo in the sandbox with
