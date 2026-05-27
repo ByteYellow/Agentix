@@ -347,7 +347,7 @@ async def _run_instances(instances: list[dict], args: argparse.Namespace, out_di
 
 async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--bundle", default="eval-cc-swe:0.2.0")
+    parser.add_argument("--bundle", required=True)
     parser.add_argument("--swebench-namespace", default="swebench")
     parser.add_argument("--swebench-tag", default="latest")
     parser.add_argument("--arch", default="x86_64", choices=["x86_64", "arm64"])

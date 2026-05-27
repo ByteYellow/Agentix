@@ -42,28 +42,29 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--deployment",
-        default="local",
+        default="docker",
         help=(
             "Deployment backend registered under the `agentix.deployment` "
-            "entry-point group (e.g. `local` for Docker, `apptainer` for HPC)."
+            "entry-point group (e.g. `docker`, `podman`, or `apptainer`)."
         ),
     )
     parser.add_argument(
         "--image",
         default="python:3.13-slim",
         help=(
-            "Task base image. For `local`: a Docker image ref. For "
+            "Task base image. For `docker`/`podman`: a Docker image ref. For "
             "`apptainer`: any reference apptainer can pull "
             "(`docker://...`, `library://...`, a local `.sif`, etc.)."
         ),
     )
     parser.add_argument(
         "--bundle",
-        default="hello-world",
+        required=True,
         help=(
-            "Agentix bundle reference. For `local`: a Docker image tag. "
+            "Agentix bundle reference. For `docker`/`podman`: cache path returned by "
+            "`agentix deploy`. "
             "For `apptainer`: path to a tar bundle produced by "
-            "`agentix build --format tar`."
+            "`agentix build`."
         ),
     )
     return parser.parse_args()

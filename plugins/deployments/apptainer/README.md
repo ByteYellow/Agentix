@@ -11,7 +11,7 @@ agentix-deployment-apptainer`.
 ## Inputs
 
 * `SandboxConfig.bundle` — path to a tar bundle produced by
-  `agentix build --format tar`. The tar's `nix/` tree is extracted once
+  `agentix build`. The tar's `nix/` tree is extracted once
   per bundle digest into a process-local scratch directory and reused
   across sandboxes that share the bundle.
 * `SandboxConfig.image` — task image. Apptainer-native references

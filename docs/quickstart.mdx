@@ -9,19 +9,16 @@ This quickstart walks the shortest end-to-end Agentix flow:
 2. `agentix build` packages the project + every transitive dep into a
    self-contained bundle — no `FROM`, no `pip install` at run
    time, just a Nix closure under `/nix/store/...`.
-3. Deploy a sandbox: the bundle is overlaid onto a task base
-   image with `--volumes-from`. Different task images, same runtime.
+3. Deploy a sandbox: the bundle is bind-mounted onto a task base image
+   at `/nix`. Different task images, same runtime.
 4. Call a remote function with `RuntimeClient.remote(fn, …)`.
 
 ## Prerequisites
 
 - Python 3.11 or newer
-- Docker (Engine 20.10+; 25.0+ recommended once `--mount type=image`
-  stabilizes)
-- [Nix](https://nixos.org/download/) on the build host (the framework
-  vendors a pinned Nixpkgs revision)
-- `uv` for dependency locking (`uv.lock` is mandatory — `uv2nix` reads
-  it to build the Python closure)
+- Docker or Podman for the build executor and local sandbox backend
+- `uv` for dependency locking (`uv.lock` is mandatory; the build
+  container runs `uv sync` against it)
 
 ## One project, two images
 
@@ -61,7 +58,7 @@ hello-agentix/
     dependencies = [
         "agentixx>=0.1.5",
         "agentix-runtime-basic>=0.1.4",      # bash + files namespaces
-        "agentix-deployment-docker>=0.1.4",  # local-docker backend
+        "agentix-deployment-docker>=0.1.4",  # docker/podman backend
     ]
 
     [build-system]
@@ -90,8 +87,8 @@ hello-agentix/
     uv lock
     ```
 
-    `agentix build` refuses to run without it — `uv2nix` reads the
-    lock to construct a deterministic Python closure.
+    `agentix build` refuses to run without it because the builder runs
+    `uv sync` against the project lock.
   </Tab>
 </Tabs>
 
@@ -100,27 +97,22 @@ hello-agentix/
 ```bash
 cd hello-agentix
 uv sync
-uv run agentix build . --name hello-agentix --format oci-image
-# → docker images now has hello-agentix:0.1.0 and hello-agentix:latest
+uv run agentix build . --name hello-agentix --output dist/hello-agentix.bundle.tar
+uv run agentix deploy docker dist/hello-agentix.bundle.tar
+# → bundle -> /home/me/.cache/agentix/bundles/sha256-...
 ```
 
 `agentix build` does, in order:
 
 1. Stages your project + every plugin's `default.nix` (each plugin
    ships its system deps next to its Python module).
-2. Runs `nix build` against the vendored Nixpkgs pin: `uv2nix`
-   produces a derivation for every entry in `uv.lock`,
-   `symlinkJoin` merges them with the plugin trees.
-3. Loads the resulting bundle image into Docker and also applies a
-   `:latest` alias for convenience.
+2. Runs Nix for the interpreter/system closures and `uv sync` for the
+   Python dependency closure inside the build container.
+3. Writes a portable bundle tar containing `manifest.json + nix/`.
 
-The bundle declares `VOLUME /nix` so the deployment can share it via
-`--volumes-from` (see below). No base image, no `FROM` directive, no
-runtime `pip install`.
-
-`agentix build` defaults to the portable tar bundle format. Use
-`--format oci-image` when you want to run the bundle with
-`DockerDeployment`.
+`agentix deploy docker|podman` unpacks that tar into a content-addressed
+host cache. Docker-compatible sandbox runs bind-mount the cached `nix/`
+tree at `/nix`. No runtime `pip install`.
 
 ## Call it
 
@@ -137,8 +129,8 @@ async def main() -> None:
     config = SandboxConfig(
         # Task base image — workload environment.
         image="python:3.13-slim",
-        # Bundle overlay from `agentix build`.
-        bundle="hello-agentix:0.1.0",
+        # Cache path printed by `agentix deploy docker|podman`.
+        bundle="/home/me/.cache/agentix/bundles/sha256-...",
     )
     async with session(deployment, config) as sandbox:
         print(f"sandbox up at {sandbox.runtime_url}")
@@ -166,13 +158,10 @@ exit=0 stdout='hello from Linux <kernel> ... GNU/Linux\n'
 Under the hood, `DockerDeployment.create` does:
 
 ```bash
-# Once per distinct bundle — stopped container holds its /nix.
-docker create --name agentix-runtime-<hash> hello-agentix:0.1.0
-
-# Per sandbox — task image plus the runtime's /nix as a shared volume.
+# Per sandbox — task image plus the cached runtime /nix.
 docker run -d --name <sid> -p 127.0.0.1:<port>:<port> \
     -e AGENTIX_BIND_PORT=<port> \
-    --volumes-from agentix-runtime-<hash>:ro \
+    --mount type=bind,source=/home/me/.cache/agentix/bundles/sha256-.../nix,target=/nix,readonly \
     --entrypoint /nix/runtime/bootstrap.sh \
     python:3.13-slim
 ```
@@ -180,11 +169,7 @@ docker run -d --name <sid> -p 127.0.0.1:<port>:<port> \
 The task container sees `/nix/store/...` and `/nix/runtime/bin/...` at
 their canonical paths. Python's RPATH (baked at Nix build time) finds
 its libs under `/nix/store/...` because that's exactly where the
-mounted volume puts them.
-
-(`--mount type=image,subpath=nix` will let us skip the carrier when
-that combination lands in stable Docker — both paths use the same
-entrypoint, so the swap is transparent.)
+mounted cache puts them.
 
 ## Next
 

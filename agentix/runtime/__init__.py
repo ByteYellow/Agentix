@@ -31,10 +31,10 @@ Rename / move the bundle entry point in one place, not N.
 from __future__ import annotations
 
 BUNDLE_NIX_ROOT = "/nix"
-"""Where the bundle's `/nix` tree is bind-mounted inside the task container."""
+"""Fixed in-container mount point for the bundle's Nix runtime tree."""
 
 BUNDLE_RUNTIME_ROOT = "/nix/runtime"
-"""The runtime sub-tree under the bind-mounted bundle root."""
+"""Runtime sub-tree under the fixed in-container `/nix` mount."""
 
 BUNDLE_RUNTIME_ENTRYPOINT = "/nix/runtime/bootstrap.sh"
 """Path inside the bundle that deployment backends exec as the
@@ -47,8 +47,12 @@ BIND_PORT_ENV = "AGENTIX_BIND_PORT"
 """Env var the bundle's bootstrap script reads to choose its listen
 port. Backends pick a free host port and pass it via this name."""
 
+BIND_HOST_ENV = "AGENTIX_BIND_HOST"
+"""Env var the bundle's bootstrap script reads to choose its listen host."""
+
 
 __all__ = [
+    "BIND_HOST_ENV",
     "BIND_PORT_ENV",
     "BUNDLE_NIX_ROOT",
     "BUNDLE_RUNTIME_ENTRYPOINT",

@@ -19,7 +19,7 @@ Set `E2B_API_KEY` in the environment.
 ## Use
 
 ```bash
-agentix deploy e2b --image my-agent:0.1.0
+agentix deploy e2b dist/my-agent.bundle.tar
 ```
 
 ```python
@@ -27,7 +27,7 @@ from agentix import RuntimeClient, SandboxConfig
 from agentix.deployment.e2b import E2BDeployment
 
 async with E2BDeployment().lifecycle(
-    SandboxConfig(image="python:3.13-slim", bundle="my-agent:0.1.0")
+    SandboxConfig(image="python:3.13-slim", bundle="<backend bundle ref>")
 ) as sandbox:
     async with RuntimeClient(sandbox.runtime_url) as c:
         ...

@@ -42,7 +42,7 @@ main()
 """
 _WORKER_IMPORT_ROOT = Path(__file__).resolve().parents[4]
 # Plugin `default.nix` derivations are symlink-joined into this path
-# inside the bundle image (see `agentix/builder/flake.nix`). Worker code
+# inside the bundle runtime tree (see `agentix/builder/flake.nix`). Worker code
 # (`subprocess.run("claude", ...)`, `c.remote(cc.run, ...)`, ...) must
 # be able to find those binaries by bare name.
 _RUNTIME_BIN_PATH = "/nix/runtime/bin"
@@ -100,7 +100,7 @@ def _clean_worker_env(runtime_bin_dir: Path | None) -> dict[str, str]:
     }
     # Build PATH from: the venv's bin (`runtime_bin_dir`), the bundle's
     # symlink-join (`/nix/runtime/bin`), then the parent environment's
-    # PATH. Inside the bundle image the first two are siblings and both
+    # PATH. Inside the bundle runtime tree the first two are siblings and both
     # must be searchable; outside the bundle, only the first one exists.
     parts: list[str] = []
     if runtime_bin_dir is not None:

@@ -1,11 +1,10 @@
-"""Invoke `docker buildx` against a staged build context.
+"""Invoke a container build CLI against a staged build context.
 
 This module is intentionally narrow: a single subprocess helper that
-echoes commands and surfaces failures as `SystemExit`, plus two
-wrappers around `docker buildx build --load`. The first is the
-low-level form used by the tar pipeline (one cache tag, no auto
-`:latest`); the second is the user-facing wrapper for `--format
-oci-image` that mirrors the bare-NAME → `NAME:latest` convenience.
+echoes commands and surfaces failures as `SystemExit`, plus the image
+build helper used by the tar pipeline. Docker remains the default and
+uses `docker buildx build --load`; Podman can be selected by passing
+`ContainerBuildConfig(container_bin="podman", ...)`.
 
 Heavy lifting — `uv sync`, `nix build` — happens inside the container
 once buildx kicks off; the host never sees Python or Nix directly.
@@ -13,11 +12,27 @@ once buildx kicks off; the host never sees Python or Nix directly.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from agentix.cli.build.platform import normalize_platform
+
+_PROXY_BUILD_ARG_NAMES = ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+
+
+@dataclass(frozen=True)
+class ContainerBuildConfig:
+    """Docker-compatible build executor settings."""
+
+    container_bin: str = "docker"
+    container_args: tuple[str, ...] = ()
+    container_run_args: tuple[str, ...] = ()
+    builder_base: str | None = None
+    nix_substituters: tuple[str, ...] = ()
+    nix_trusted_public_keys: tuple[str, ...] = ()
 
 
 def _run(
@@ -37,36 +52,91 @@ def _run(
     return proc
 
 
-def _docker_build_image(stage: Path, *, tags: list[str], project_subpath: Path, platform: str) -> None:
-    """`docker buildx build --load` the staged context with explicit tags."""
+def _build_container_bin(config: ContainerBuildConfig | None = None) -> str:
+    return (config or ContainerBuildConfig()).container_bin
+
+
+def _build_container_args(config: ContainerBuildConfig | None = None) -> list[str]:
+    return list((config or ContainerBuildConfig()).container_args)
+
+
+def _build_container_run_args(config: ContainerBuildConfig | None = None) -> list[str]:
+    return list((config or ContainerBuildConfig()).container_run_args)
+
+
+def _proxy_build_args() -> list[str]:
+    return [
+        arg
+        for name in _PROXY_BUILD_ARG_NAMES
+        if (value := os.environ.get(name))
+        for arg in ("--build-arg", f"{name}={value}")
+    ]
+
+
+def _nix_build_args(config: ContainerBuildConfig | None = None) -> list[str]:
+    config = config or ContainerBuildConfig()
+    args: list[str] = []
+    if config.builder_base:
+        args.extend(["--build-arg", f"AGENTIX_BUILDER_BASE={config.builder_base}"])
+    if config.nix_substituters:
+        args.extend(["--build-arg", f"AGENTIX_NIX_SUBSTITUTERS={' '.join(config.nix_substituters)}"])
+    if config.nix_trusted_public_keys:
+        args.extend(["--build-arg", f"AGENTIX_NIX_TRUSTED_PUBLIC_KEYS={' '.join(config.nix_trusted_public_keys)}"])
+    return args
+
+
+def _docker_build_image(
+    stage: Path,
+    *,
+    tags: list[str],
+    project_subpath: Path,
+    platform: str,
+    config: ContainerBuildConfig | None = None,
+) -> None:
+    """Build the staged context with explicit tags."""
     if not tags:
-        raise SystemExit("internal error: docker image build requires at least one tag")
-    _run([
-        "docker",
-        "buildx",
-        "build",
-        "--platform",
-        normalize_platform(platform),
-        "--load",
-        *(arg for tag in tags for arg in ("-t", tag)),
-        "--build-arg",
-        f"AGENTIX_PROJECT_SUBPATH={project_subpath}",
-        "--progress=plain",
-        str(stage),
-    ])
+        raise SystemExit("internal error: container image build requires at least one tag")
+    config = config or ContainerBuildConfig()
+    bin_name = config.container_bin
+    tags_args = [arg for tag in tags for arg in ("-t", tag)]
+    if bin_name == "docker":
+        cmd = [
+            bin_name,
+            "buildx",
+            "build",
+            "--platform",
+            normalize_platform(platform),
+            "--load",
+            *_build_container_args(config),
+            *_proxy_build_args(),
+            *_nix_build_args(config),
+            *tags_args,
+            "--build-arg",
+            f"AGENTIX_PROJECT_SUBPATH={project_subpath}",
+            "--progress=plain",
+            str(stage),
+        ]
+    else:
+        cmd = [
+            bin_name,
+            "build",
+            "--platform",
+            normalize_platform(platform),
+            *_build_container_args(config),
+            *_proxy_build_args(),
+            *_nix_build_args(config),
+            *tags_args,
+            "--build-arg",
+            f"AGENTIX_PROJECT_SUBPATH={project_subpath}",
+            str(stage),
+        ]
+    _run(cmd)
 
 
-def _docker_build(stage: Path, *, name: str, tag: str, project_subpath: Path, platform: str) -> str:
-    """Build the Docker-compatible bundle image; return the primary image ref.
-
-    A bare `NAME` is also tagged `NAME:latest` for convenience.
-    """
-    ref = f"{name}:{tag}"
-    tags = [ref]
-    if tag != "latest":
-        tags.append(f"{name}:latest")
-    _docker_build_image(stage, tags=tags, project_subpath=project_subpath, platform=platform)
-    return ref
-
-
-__all__ = ["_docker_build", "_docker_build_image", "_run"]
+__all__ = [
+    "_build_container_bin",
+    "_build_container_run_args",
+    "ContainerBuildConfig",
+    "_docker_build_image",
+    "_run",
+]

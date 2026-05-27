@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# agentix bundle builder. The produced image is a *runtime carrier*:
-# its `/nix` holds everything a sandbox needs and is mounted into a
-# task container at `/nix` (`--mount type=image,subpath=nix`).
+# agentix bundle builder. The transient build image contains `/nix`
+# with everything a sandbox needs. The host build command copies that
+# tree into the portable bundle tar; deployment backends later make the
+# same tree visible in the task container at `/nix`.
 #
 #   /nix/store/...              the closures (interpreter, uv, system deps)
 #   /nix/runtime/venv           the uv venv — all Python deps
@@ -10,14 +11,30 @@
 #
 # Nix runs only inside this build — the host needs just docker.
 
-FROM nixos/nix:latest
+ARG AGENTIX_BUILDER_BASE=nixos/nix:latest
+FROM ${AGENTIX_BUILDER_BASE}
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG AGENTIX_NIX_SUBSTITUTERS
+ARG AGENTIX_NIX_TRUSTED_PUBLIC_KEYS
 
 # Flakes + the modern CLI; accept flake `nixConfig` for substituters.
 # Syscall filtering can fail under Docker buildx emulation; the Docker
 # build sandbox is already the outer isolation boundary here.
 RUN echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf \
  && echo "accept-flake-config = true" >> /etc/nix/nix.conf \
- && echo "filter-syscalls = false" >> /etc/nix/nix.conf
+ && echo "filter-syscalls = false" >> /etc/nix/nix.conf \
+ && if [ -n "${AGENTIX_NIX_SUBSTITUTERS}" ]; then \
+        echo "substituters = ${AGENTIX_NIX_SUBSTITUTERS}" >> /etc/nix/nix.conf; \
+    fi \
+ && if [ -n "${AGENTIX_NIX_TRUSTED_PUBLIC_KEYS}" ]; then \
+        echo "trusted-public-keys = ${AGENTIX_NIX_TRUSTED_PUBLIC_KEYS}" >> /etc/nix/nix.conf; \
+    fi
 
 # Where the project sits inside the copied repo (a uv-workspace member
 # or cookbook example lives in a subdirectory). Passed by `agentix build`.
@@ -28,7 +45,13 @@ COPY . /build
 WORKDIR /build
 
 # nix build (toolchain + runtime), uv venv + uv sync, closure discovery.
-RUN sh ./bundle-build.sh
+RUN export http_proxy="${http_proxy:-$HTTP_PROXY}" \
+ && export https_proxy="${https_proxy:-$HTTPS_PROXY}" \
+ && export no_proxy="${no_proxy:-$NO_PROXY}" \
+ && export HTTP_PROXY="${HTTP_PROXY:-$http_proxy}" \
+ && export HTTPS_PROXY="${HTTPS_PROXY:-$https_proxy}" \
+ && export NO_PROXY="${NO_PROXY:-$no_proxy}" \
+ && sh ./bundle-build.sh
 
 ENV PATH="/nix/runtime/venv/bin:/nix/runtime/bin:${PATH}" \
     LD_LIBRARY_PATH="/nix/runtime/lib" \

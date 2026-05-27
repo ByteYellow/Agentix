@@ -2,7 +2,7 @@
 
 `agentix build` runs `bundle-build.sh` inside a Docker container that
 materializes a Nix toolchain, syncs the project's uv dependencies, and
-stages every plugin Nix closure into a runtime image. The shell script,
+stages every plugin Nix closure into a `/nix` runtime tree. The shell script,
 the `Dockerfile` that wraps it, and the pinned `flake.nix` / `flake.lock`
 that drive it all ship as wheel data under this package.
 

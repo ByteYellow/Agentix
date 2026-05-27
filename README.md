@@ -59,7 +59,10 @@ from agentix import RuntimeClient, SandboxConfig, session
 from agentix.bash import run
 from agentix.deployment.docker import DockerDeployment
 
-config = SandboxConfig(image="python:3.13-slim", bundle="hello-agentix:0.1.0")
+config = SandboxConfig(
+    image="python:3.13-slim",
+    bundle="/home/me/.cache/agentix/bundles/sha256-...",  # printed by `agentix deploy`
+)
 
 async with session(DockerDeployment(), config) as sandbox:
     async with RuntimeClient(sandbox.runtime_url) as client:
@@ -77,7 +80,7 @@ with [`abridge`](https://github.com/Agentiix/abridge) for eval and RL.
 <tr>
 <td><strong>Bundle</strong></td>
 <td><code>agentix build [path]</code></td>
-<td>A deploy-ready image with your code and dependencies</td>
+<td>A portable tar with your code and dependencies</td>
 </tr>
 <tr>
 <td><strong>Remote call</strong></td>
@@ -161,14 +164,16 @@ From [`agentix-cookbook/examples/hello-agentix`](https://github.com/Agentiix/age
 ```bash
 cd examples/hello-agentix
 uv sync
-uv run agentix build . --name hello-agentix --format oci-image
-uv run python run.py
+uv run agentix build . --name hello-agentix --output dist/hello-agentix.bundle.tar
+BUNDLE=$(uv run agentix deploy docker dist/hello-agentix.bundle.tar | awk -F' -> ' '/^bundle -> /{print $2}')
+uv run python run.py --bundle "$BUNDLE"
 ```
 
 Cross-arch sandboxes:
 
 ```bash
-uv run agentix build . --name hello-agentix --format oci-image --platform linux/amd64
+uv run agentix build . --name hello-agentix --platform linux/amd64 --output dist/hello-agentix.bundle.tar
+BUNDLE=$(uv run agentix deploy docker dist/hello-agentix.bundle.tar --platform linux/amd64 | awk -F' -> ' '/^bundle -> /{print $2}')
 ```
 
 Full walkthrough: [quickstart](https://agentiix.github.io/quickstart).

@@ -6,9 +6,11 @@ import pickle
 
 import pytest
 
-from agentix.deployment.base import SandboxConfig
+from agentix.deployment.base import SandboxConfig, SandboxResource
 from agentix.runtime.shared.callables import RemoteCallable
 from agentix.runtime.shared.models import RemoteError, RemoteRequest, RemoteResponse
+
+BUNDLE_REF = "/cache/agentix/bundles/sha256-deadbeef"
 
 
 def _example_fn(a: int) -> int:
@@ -43,26 +45,49 @@ def test_remote_response_error_shape():
     assert resp.error.type == "ValueError"
 
 
-def test_sandbox_config_two_images():
-    cfg = SandboxConfig(image="ubuntu:24.04", bundle="my-agent:0.1.0")
+def test_sandbox_config_image_and_bundle_ref():
+    cfg = SandboxConfig(image="ubuntu:24.04", bundle=BUNDLE_REF)
     assert cfg.image == "ubuntu:24.04"
-    assert cfg.bundle == "my-agent:0.1.0"
+    assert cfg.bundle == BUNDLE_REF
     assert cfg.env is None
 
 
 def test_sandbox_config_with_env():
     cfg = SandboxConfig(
         image="ubuntu:24.04",
-        bundle="my-agent:0.1.0",
+        bundle=BUNDLE_REF,
         env={"FOO": "bar"},
     )
     assert cfg.env == {"FOO": "bar"}
 
 
+def test_sandbox_config_with_resource():
+    cfg = SandboxConfig(
+        image="ubuntu:24.04",
+        bundle=BUNDLE_REF,
+        resource=SandboxResource(cpu=4, memory="16g", gpu=2),
+    )
+    assert cfg.resource is not None
+    assert cfg.resource.cpu == 4
+    assert cfg.resource.memory == "16g"
+    assert cfg.resource.gpu == 2
+
+
+def test_sandbox_resource_validates_positive_values():
+    with pytest.raises(Exception):
+        SandboxResource(cpu=0)
+    with pytest.raises(Exception):
+        SandboxResource(memory=0)
+    with pytest.raises(Exception):
+        SandboxResource(memory="")
+    with pytest.raises(Exception):
+        SandboxResource(gpu=0)
+
+
 def test_sandbox_config_with_platform():
     cfg = SandboxConfig(
         image="ubuntu:24.04",
-        bundle="my-agent:0.1.0",
+        bundle=BUNDLE_REF,
         platform="linux/amd64",
     )
     assert cfg.platform == "linux/amd64"
@@ -74,4 +99,4 @@ def test_sandbox_config_requires_both_images():
     with pytest.raises(Exception):
         SandboxConfig(image="ubuntu:24.04")  # type: ignore[call-arg]
     with pytest.raises(Exception):
-        SandboxConfig(bundle="my-agent:0.1.0")  # type: ignore[call-arg]
+        SandboxConfig(bundle=BUNDLE_REF)  # type: ignore[call-arg]

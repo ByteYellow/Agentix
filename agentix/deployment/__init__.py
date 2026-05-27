@@ -11,6 +11,6 @@ import pkgutil
 
 __path__ = pkgutil.extend_path(__path__, __name__)
 
-from agentix.deployment.base import Deployment
+from agentix.deployment.base import BundleMaterializer, Deployment, MaterializedBundle
 
-__all__ = ["Deployment"]
+__all__ = ["BundleMaterializer", "Deployment", "MaterializedBundle"]

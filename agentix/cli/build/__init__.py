@@ -7,7 +7,7 @@ single concern:
   * `pyproject` — read project metadata from `pyproject.toml`.
   * `platform`  — normalize Docker/Nix platform strings.
   * `context`   — find the git repo and stage the build context.
-  * `docker`    — invoke `docker buildx build`.
+  * `docker`    — invoke the Docker-compatible build executor.
   * `naming`    — derive bundle name/tag and output paths.
   * `bundle`    — stream the image tar back out and assemble a portable
                   `manifest.json + nix/` archive.
@@ -48,7 +48,7 @@ import click
 
 from agentix.cli.build.bundle import _build_tar_bundle
 from agentix.cli.build.context import resolve_context, stage_context
-from agentix.cli.build.docker import _docker_build
+from agentix.cli.build.docker import ContainerBuildConfig
 from agentix.cli.build.naming import _tar_output_path, parse_name
 from agentix.cli.build.platform import (
     detect_default_platform,
@@ -56,8 +56,6 @@ from agentix.cli.build.platform import (
     normalize_platform,
 )
 from agentix.cli.build.pyproject import REPO_ROOT, detect_python_version, read_pyproject
-
-_BUILD_FORMATS = ("tar", "oci-image")
 
 # Click's default help formatter rewraps each paragraph, which would
 # mangle the indented examples and the bundle-layout tree below. A `\b`
@@ -95,9 +93,9 @@ Examples:
     agentix build . --name hello-agentix  # bundle tar (auto-appends version)
     agentix build . --name hello:dev      # bundle tar tagged as dev
     agentix build . --platform linux/amd64
-    agentix build . --format oci-image    # Docker-compatible image path
-    agentix build . --format tar          # Agentix bundle tar (default)
+    agentix build . --container-bin podman
     agentix build . --dry-run             # stage the build context only
+    agentix deploy docker dist/hello-0.1.0-linux-amd64.bundle.tar
 
 \b
 Portable bundle tar layout:
@@ -126,19 +124,11 @@ Portable bundle tar layout:
     ),
 )
 @click.option(
-    "--format",
-    "fmt",
-    type=click.Choice(_BUILD_FORMATS),
-    default="tar",
-    show_default=True,
-    help="Artifact format: 'tar' writes manifest.json + nix/; 'oci-image' loads a Docker-compatible image.",
-)
-@click.option(
     "-o",
     "--output",
     default=None,
     metavar="PATH",
-    help="Output file or directory for --format tar. Default: dist/<name>-<tag>-<platform>.bundle.tar",
+    help="Output file or directory. Default: dist/<name>-<tag>-<platform>.bundle.tar",
 )
 @click.option(
     "--platform",
@@ -150,18 +140,60 @@ Portable bundle tar layout:
     ),
 )
 @click.option("--dry-run", is_flag=True, help="Stage the build context to ./build/<name>/ and stop.")
+@click.option(
+    "--container-bin",
+    default=None,
+    metavar="BIN",
+    help="Docker-compatible build CLI to use. Default: docker.",
+)
+@click.option(
+    "--container-arg",
+    "container_args",
+    multiple=True,
+    metavar="ARG",
+    help="Extra argument passed to the container build command; repeat for multiple args.",
+)
+@click.option(
+    "--container-run-arg",
+    "container_run_args",
+    multiple=True,
+    metavar="ARG",
+    help="Extra argument passed when extracting a tar bundle with container run; repeat for multiple args.",
+)
+@click.option(
+    "--builder-base",
+    default=None,
+    metavar="IMAGE",
+    help="Builder base image. Default: nixos/nix:latest from the bundled Dockerfile.",
+)
+@click.option(
+    "--nix-substituter",
+    "nix_substituters",
+    multiple=True,
+    metavar="URL",
+    help="Nix binary cache substituter inside the build container; repeat in fallback order.",
+)
+@click.option(
+    "--nix-trusted-public-key",
+    "nix_trusted_public_keys",
+    multiple=True,
+    metavar="KEY",
+    help="Extra Nix cache public key inside the build container; repeat for multiple keys.",
+)
 def build(
     path: Path,
     name: str | None,
-    fmt: str,
     output: str | None,
     platform: str | None,
     dry_run: bool,
+    container_bin: str | None,
+    container_args: tuple[str, ...],
+    container_run_args: tuple[str, ...],
+    builder_base: str | None,
+    nix_substituters: tuple[str, ...],
+    nix_trusted_public_keys: tuple[str, ...],
 ) -> int:
     """Package a Python project into a bundle artifact."""
-    if output and fmt != "tar":
-        raise SystemExit("--output is only supported with --format tar")
-
     src = path.resolve()
     if not src.is_dir():
         raise SystemExit(f"{src}: not a directory")
@@ -175,6 +207,14 @@ def build(
     platform = normalize_platform(platform) if platform else detect_default_platform()
     context_root, project_subpath = resolve_context(src)
     tar_output = _tar_output_path(output, name=name, tag=tag, platform=platform)
+    build_config = ContainerBuildConfig(
+        container_bin=container_bin or "docker",
+        container_args=container_args,
+        container_run_args=container_run_args,
+        builder_base=builder_base,
+        nix_substituters=nix_substituters,
+        nix_trusted_public_keys=nix_trusted_public_keys,
+    )
 
     if dry_run:
         out = REPO_ROOT / "build" / name
@@ -183,9 +223,8 @@ def build(
         stage_context(out, context_root=context_root, python_version=python_version, platform=platform)
         print(f"staged build context → {out}")
         print(f"  bundle           → {name}:{tag}")
-        print(f"  format           → {fmt}")
-        if fmt == "tar":
-            print(f"  output           → {tar_output}")
+        print("  format           → tar")
+        print(f"  output           → {tar_output}")
         print(f"  platform         → {platform}")
         print(f"  nix system       → {nix_system_for_platform(platform)}")
         print(f"  python           → 3.{python_version[1:]}")
@@ -196,21 +235,16 @@ def build(
     with TemporaryDirectory(prefix="agentix-build-") as tmp:
         stage = Path(tmp) / "ctx"
         stage_context(stage, context_root=context_root, python_version=python_version, platform=platform)
-        if fmt == "oci-image":
-            ref = _docker_build(stage, name=name, tag=tag, project_subpath=project_subpath, platform=platform)
-            print(f"\nimage ready → {ref}", file=sys.stderr)
-            if tag != "latest":
-                print(f"            → {name}:latest", file=sys.stderr)
-        else:
-            artifact = _build_tar_bundle(
-                stage,
-                output_path=tar_output,
-                name=name,
-                tag=tag,
-                project_subpath=project_subpath,
-                platform=platform,
-            )
-            print(f"\nbundle ready → {artifact}", file=sys.stderr)
+        artifact = _build_tar_bundle(
+            stage,
+            output_path=tar_output,
+            name=name,
+            tag=tag,
+            project_subpath=project_subpath,
+            platform=platform,
+            config=build_config,
+        )
+        print(f"\nbundle ready → {artifact}", file=sys.stderr)
     return 0
 
 

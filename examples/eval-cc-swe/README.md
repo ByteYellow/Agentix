@@ -86,9 +86,10 @@ official harness flow.
   SWE-bench project — already contains the `testbed` conda env and
   `/testbed` cloned at `base_commit`. Runner constructs the tag from
   the instance row (the lowercase id with `__` rewritten to `_1776_`).
-- **Bundle image** (`SandboxConfig.bundle`): the bundle this
-  directory produces. Brings in `claude`, `git`, the runtime server, the
-  Claude Code agent plugin, and the SWE dataset plugin, all under
+- **Bundle** (`SandboxConfig.bundle`): the backend-side reference printed
+  by `agentix deploy`. The sandbox still sees it at the fixed in-container
+  path `/nix`, bringing in `claude`, `git`, the runtime server, the
+  Claude Code agent plugin, and the SWE dataset plugin under
   `/nix/runtime`.
 
 ## Install, build, run
@@ -97,8 +98,9 @@ official harness flow.
 # host-side: installs the example plus local agent/dataset plugins
 uv sync
 
-# package the project + every declared dep into one Docker-compatible image
-uv run agentix build . --name eval-cc-swe:0.2.0 --format oci-image
+# package the project + every declared dep into one portable bundle tar
+uv run agentix build . --name eval-cc-swe:0.2.0 --output dist/eval-cc-swe.bundle.tar
+BUNDLE=$(uv run agentix deploy docker dist/eval-cc-swe.bundle.tar | awk -F' -> ' '/^bundle -> /{print $2}')
 
 # (optional) pre-pull the SWE-bench eval images you plan to score
 docker pull swebench/sweb.eval.x86_64.django_1776_django-11099:latest
@@ -108,18 +110,18 @@ export OPENAI_BASE_URL=https://api.openai.com/v1
 export OPENAI_API_KEY=sk-...
 export UPSTREAM_MODEL=gpt-4o-mini
 
-python -m runner --limit 5
+python -m runner --bundle "$BUNDLE" --limit 5
 # or specific instances:
-python -m runner --instance-id django__django-11099 --instance-id sympy__sympy-20212
+python -m runner --bundle "$BUNDLE" --instance-id django__django-11099 --instance-id sympy__sympy-20212
 
 # Ground-truth check: skips client1 and scores dataset patches directly.
 uv run python -m runner --ground-truth --fail-on-unresolved \
-  --concurrency 20 --out runs/ground-truth
+  --bundle "$BUNDLE" --concurrency 20 --out runs/ground-truth
 ```
 
 Runner flags (all optional unless noted):
 
-- `--bundle`        runtime bundle to overlay (default `eval-cc-swe:0.2.0`)
+- `--bundle`        materialized bundle cache path printed by `agentix deploy`
 - `--swebench-namespace`  docker namespace for the eval images (default `swebench`)
 - `--swebench-tag`        tag on those images (default `latest`)
 - `--arch`                `x86_64` or `arm64`
