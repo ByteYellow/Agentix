@@ -1,7 +1,8 @@
-"""Live Textual dashboard for Agentix batch rollouts."""
+"""Agentix TUI — a modern Textual control room for Agentix."""
 
 from __future__ import annotations
 
-from .app import EvalDashboard
+from .app import AgentixTUI
+from .models import RunSpec
 
-__all__ = ["EvalDashboard"]
+__all__ = ["AgentixTUI", "RunSpec"]

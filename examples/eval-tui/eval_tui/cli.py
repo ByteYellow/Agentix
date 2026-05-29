@@ -1,10 +1,9 @@
-"""CLI for the Agentix eval dashboard.
+"""CLI for the Agentix TUI.
 
-`agentix-eval-tui --demo 40` runs a synthetic, no-Docker demo. For real runs,
-resolve a dataset/agent/provider exactly like `agentix-run`::
-
-    agentix-eval-tui --dataset my_pkg:dataset --agent my_pkg:agent \\
-        --provider docker --bundle eval:0.1.0 --n-concurrent 8
+- `agentix-eval-tui --demo 40` — synthetic, no-Docker rollouts.
+- `agentix-eval-tui --dataset m:d --agent m:a --bundle eval:0.1.0` — real run,
+  adapters resolved like `agentix-run`.
+- `agentix-eval-tui` — no run; browse the Catalog (and the planned tabs).
 """
 
 from __future__ import annotations
@@ -14,7 +13,8 @@ import importlib
 import sys
 from typing import Any
 
-from .app import EvalDashboard
+from .app import AgentixTUI
+from .models import RunSpec
 
 
 def _load(path: str) -> Any:
@@ -40,7 +40,7 @@ def _load_provider(name_or_path: str) -> Any:
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="agentix-eval-tui", description="Live TUI for Agentix batch rollouts.")
+    parser = argparse.ArgumentParser(prog="agentix-eval-tui", description="Modern TUI control room for Agentix.")
     parser.add_argument("--demo", type=int, metavar="N", default=None, help="Run N synthetic instances (no Docker).")
     parser.add_argument("--dataset", help="Dataset adapter as 'module:attr'.")
     parser.add_argument("--agent", help="Agent adapter as 'module:attr'.")
@@ -52,37 +52,42 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(sys.argv[1:] if argv is None else argv)
-
+def _build_spec(args: argparse.Namespace) -> RunSpec | None:
     if args.demo is not None:
         from .demo import DemoAgent, DemoDataset, DemoProvider
 
-        app = EvalDashboard(
-            dataset=DemoDataset(args.demo),
+        dataset = DemoDataset(args.demo)
+        return RunSpec(
+            dataset=dataset,
             agent=DemoAgent(),
             provider=DemoProvider(),
             bundle="demo",
-            n_concurrent=args.n_concurrent,
-            run_title="Agentix · eval (demo)",
-        )
-    else:
-        missing = [name for name in ("dataset", "agent", "bundle") if not getattr(args, name)]
-        if missing:
-            raise SystemExit(f"--{', --'.join(missing)} required (or use --demo N)")
-        dataset = _load(args.dataset)
-        instances = list(dataset.instances())
-        if args.limit is not None:
-            instances = instances[: args.limit]
-        app = EvalDashboard(
-            dataset=dataset,
-            agent=_load(args.agent),
-            provider=_load_provider(args.provider),
-            bundle=args.bundle,
-            model=args.model,
-            instances=instances,
+            instances=dataset.instances(),
             n_concurrent=args.n_concurrent,
         )
 
-    app.run()
+    given = [bool(args.dataset), bool(args.agent), bool(args.bundle)]
+    if not any(given):
+        return None  # bare launch: browse the Catalog / planned tabs
+    if not all(given):
+        raise SystemExit("--dataset, --agent and --bundle must be given together (or use --demo N)")
+
+    dataset = _load(args.dataset)
+    instances = list(dataset.instances())
+    if args.limit is not None:
+        instances = instances[: args.limit]
+    return RunSpec(
+        dataset=dataset,
+        agent=_load(args.agent),
+        provider=_load_provider(args.provider),
+        bundle=args.bundle,
+        model=args.model,
+        instances=instances,
+        n_concurrent=args.n_concurrent,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    AgentixTUI(rollout_spec=_build_spec(args)).run()
     return 0
