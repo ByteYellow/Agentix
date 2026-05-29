@@ -9,20 +9,17 @@ import pkgutil
 
 __path__ = pkgutil.extend_path(__path__, __name__)
 
-from agentix._quick import quick_remote
-from agentix.deployment.base import (
+from agentix.provider.base import (
     BundleMaterializer,
-    Deployment,
     MaterializedBundle,
     Sandbox,
     SandboxConfig,
     SandboxId,
     SandboxInfo,
+    SandboxProvider,
     SandboxResource,
-    deployments,
-    load_deployment,
-    register_deployment,
-    session,
+    providers,
+    register_provider,
 )
 from agentix.runtime.client import RemoteCallError, RuntimeClient
 from agentix.runtime.client._sio_facade import AsyncClientNamespace, request_handler
@@ -35,7 +32,6 @@ __version__ = "0.2.7"
 __all__ = [
     "AsyncClientNamespace",
     "BundleMaterializer",
-    "Deployment",
     "MaterializedBundle",
     "Namespace",
     "RemoteCallable",
@@ -46,15 +42,13 @@ __all__ = [
     "SandboxConfig",
     "SandboxId",
     "SandboxInfo",
+    "SandboxProvider",
     "SandboxResource",
     "__version__",
-    "deployments",
-    "load_deployment",
     "log",
-    "quick_remote",
-    "register_deployment",
+    "providers",
     "register_namespace",
+    "register_provider",
     "request_handler",
-    "session",
     "trace",
 ]

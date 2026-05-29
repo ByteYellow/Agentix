@@ -69,20 +69,18 @@ splices system binaries into the final bundle.
 ```python
 import asyncio
 
-from agentix import RuntimeClient
 from agentix.bash import run
-from agentix import SandboxConfig, session
-from agentix.deployment.docker import DockerDeployment
+from agentix import SandboxConfig
+from agentix.provider.docker import DockerProvider
 
 
 async def main() -> None:
-    deployment = DockerDeployment()
+    provider = DockerProvider()
     config = SandboxConfig(image="python:3.13-slim", bundle="/home/me/.cache/agentix/bundles/sha256-...")
 
-    async with session(deployment, config) as sandbox:
-        async with RuntimeClient(sandbox.runtime_url) as client:
-            result = await client.remote(run, command="echo hi")
-            print(result.stdout)
+    async with provider.session(config) as sandbox:
+        result = await sandbox.remote(run, command="echo hi")
+        print(result.stdout)
 
 
 asyncio.run(main())
@@ -103,7 +101,7 @@ pytest -x
 | `agentix/runtime/shared` | Wire types, msgpack codec, Socket.IO event names |
 | `agentix/runtime/client` | `RuntimeClient` and transport behavior |
 | `agentix/runtime/server` | FastAPI app, Socket.IO handlers, worker client, worker process, callable invocation |
-| `agentix/deployment` | Deployment protocol and backend discovery |
+| `agentix/provider` | SandboxProvider protocol + backend discovery |
 | `agentix/cli` | Build + deploy CLI (`agentix build`, `agentix deploy`, `agentix plugin`) |
 | `agentix/sio` | Sandbox-side namespace API |
 | `agentix/utils` | log + trace bridges |

@@ -30,7 +30,7 @@ def test_plugin_list_reports_loaded_and_errors(
         loaded={"docker": object, "podman": object},
         errors={"broken": RuntimeError("bad import")},
     )
-    monkeypatch.setattr(plugin_mod, "deployments", lambda: registry)
+    monkeypatch.setattr(plugin_mod, "providers", lambda: registry)
 
     assert plugin_mod.main(["list"]) == 0
 
@@ -41,6 +41,6 @@ def test_plugin_list_reports_loaded_and_errors(
 
 
 def test_plugin_list_empty(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setattr(plugin_mod, "deployments", lambda: _FakeRegistry())
+    monkeypatch.setattr(plugin_mod, "providers", lambda: _FakeRegistry())
     assert plugin_mod.main(["list"]) == 0
     assert "no deployment backends installed" in capsys.readouterr().out

@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: Build a runtime bundle, overlay it on any Linux task image, and call a remote function with RuntimeClient.remote.
+description: Build a runtime bundle, overlay it on any Linux task image, and call a remote function with sandbox.remote.
 ---
 
 This quickstart walks the shortest end-to-end Agentix flow:
@@ -11,7 +11,7 @@ This quickstart walks the shortest end-to-end Agentix flow:
    time, just a uv venv plus a Nix closure under `/nix/...`.
 3. Deploy a sandbox: the bundle is bind-mounted onto a task base image
    at `/nix`. Different task images, same runtime.
-4. Call a remote function with `RuntimeClient.remote(fn, …)`.
+4. Call a remote function with `sandbox.remote(fn, …)`.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ The two-image model is the heart of Agentix:
 - **`image`** — the task-specific base the workload runs in (a
   SWE-bench task image, a customer environment, plain Ubuntu, …).
 
-`DockerDeployment` mounts the runtime's `/nix` into the task container
+`DockerProvider` mounts the runtime's `/nix` into the task container
 at sandbox-create time. The Python interpreter, the runtime server, your
 code, and the plugin binaries (bash, coreutils, …) all live under
 `/nix/runtime/bin/` and resolve regardless of the task image's
@@ -80,8 +80,8 @@ hello-world/
     ```python
     import subprocess
 
-    from agentix import RuntimeClient
-    from agentix.deployment.base import SandboxConfig, load_deployment, session
+    from agentix.provider import providers
+    from agentix.provider.base import SandboxConfig
 
 
     def hello() -> str:
@@ -156,16 +156,16 @@ there is no `pip` in the bundle and nothing is installed at run time.
 
 ## Call it
 
-`main.py` doubles as the host orchestrator: it loads the Docker backend,
-opens a sandbox over the deployed bundle, and runs `hello()` inside it
-with `client.remote(fn, …)`.
+`main.py` doubles as the host orchestrator: it constructs the Docker
+provider, opens a sandbox over the deployed bundle, and runs `hello()`
+inside it with `sandbox.remote(fn, …)`.
 
 ```python title="main.py"
 import asyncio
 import subprocess
 
-from agentix import RuntimeClient
-from agentix.deployment.base import SandboxConfig, load_deployment, session
+from agentix.provider import providers
+from agentix.provider.base import SandboxConfig
 
 
 def hello() -> str:
@@ -177,18 +177,19 @@ def hello() -> str:
 
 
 async def main(bundle: str) -> None:
-    deployment = load_deployment("docker")()
+    # String-driven selection at a dynamic boundary; typed code can also
+    # `from agentix.provider.docker import DockerProvider` and construct it directly.
+    provider = providers().get("docker")()
     config = SandboxConfig(
         # Task base image — workload environment.
         image="python:3.13-slim",
         # Cache path captured from `agentix deploy ... --format json`.
         bundle=bundle,
     )
-    async with session(deployment, config) as sandbox:
+    async with provider.session(config) as sandbox:
         print(f"sandbox up at {sandbox.runtime_url}")
-        async with RuntimeClient(sandbox.runtime_url) as client:
-            print(f"Host result:    {hello()}")
-            print(f"Sandbox result: {await client.remote(hello)}")
+        print(f"Host result:    {hello()}")
+        print(f"Sandbox result: {await sandbox.remote(hello)}")
 ```
 
 Run it against the bundle path captured above:
@@ -206,23 +207,17 @@ Sandbox result: ripgrep 14.1.0
 ```
 
 <Tip>
-  For the 80% case — Docker, a local bundle, one function — skip the
-  session boilerplate with `agentix.quick_remote`:
-
-  ```python
-  from agentix import quick_remote
-
-  print(await quick_remote(hello, bundle="dist/hello-world.bundle.tar"))
-  ```
-
-  It loads the backend, opens a session + `RuntimeClient`, runs `fn` in a
-  fresh sandbox, and returns its result (`image="python:3.13-slim"`,
-  `deployment="docker"` by default).
+  The sandbox is a live handle — `await sandbox.remote(fn, …)` is the
+  one-call path. There is no separate `RuntimeClient` to open in the
+  common case; the provider's `session(...)` yields a sandbox you call
+  directly, then closes the connection and deletes the container on exit.
+  `RuntimeClient(url)` still exists for advanced/direct use against a
+  known `runtime_url` (e.g. an in-process server).
 </Tip>
 
 ## How the overlay works
 
-Under the hood, `DockerDeployment.create` does:
+Under the hood, `DockerProvider.create` does:
 
 ```bash
 # Per sandbox — task image plus the cached runtime /nix.

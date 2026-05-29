@@ -1,7 +1,7 @@
 """`agentix plugin` — inspect installed Agentix plugins.
 
 Read-only introspection. Today it surfaces the deployment-backend
-registry (the `agentix.deployment` entry-point group): which backends a
+registry (the `agentix.provider` entry-point group): which backends a
 `pip install` made available, and which failed to load — so a broken
 plugin is visible here instead of silently missing until you select it.
 """
@@ -13,7 +13,7 @@ from collections.abc import Sequence
 
 import click
 
-from agentix.deployment.base import deployments
+from agentix.provider.base import providers
 
 _HELP_OPTIONS = {"help_option_names": ["-h", "--help"]}
 
@@ -25,13 +25,13 @@ def plugin() -> None:
 
 @plugin.command(name="list", short_help="List installed deployment backends and their load status.")
 def list_() -> int:
-    """List deployment backends discovered via the `agentix.deployment` group.
+    """List deployment backends discovered via the `agentix.provider` group.
 
     Each backend prints `ok` with its distribution, or `ERROR` with the
     exception that broke its entry-point load — so a misbuilt plugin shows
     up here rather than only when you try to use it.
     """
-    registry = deployments()
+    registry = providers()
     loaded = registry.all()
     errors = registry.errors()
     sources = registry.sources()

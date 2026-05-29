@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import click
 
-from agentix.deployment.base import BundleMaterializer, Deployment, load_deployment
+from agentix.provider.base import BundleMaterializer, SandboxProvider, providers
 
 _DEPLOY_HELP = """\
 Materialize an Agentix bundle tar for a deployment backend.
@@ -95,24 +95,24 @@ def _instantiate_deployment(
     *,
     container_bin: str | None,
     run_args: tuple[str, ...],
-) -> Deployment:
-    cls = cast(Any, load_deployment(backend))
+) -> SandboxProvider:
+    cls = cast(Any, providers().get(backend))
     has_container_options = container_bin is not None or bool(run_args)
     if backend in {"docker", "podman"} or has_container_options:
         try:
-            docker_module = import_module("agentix.deployment.docker")
+            docker_module = import_module("agentix.provider.docker")
         except ImportError as exc:
             raise SystemExit("Docker-compatible deploy options require agentix-deployment-docker") from exc
         if backend not in {"docker", "podman"}:
             raise SystemExit("container deploy options are only supported by docker and podman backends")
-        config_cls = cast(Any, getattr(docker_module, "DockerDeploymentConfig"))
+        config_cls = cast(Any, getattr(docker_module, "DockerProviderConfig"))
         bin_name = container_bin or backend
         config = config_cls(
             container_bin=bin_name,
             run_args=list(run_args),
         )
-        return cast(Deployment, cls(config))
-    return cast(Deployment, cls())
+        return cast(SandboxProvider, cls(config))
+    return cast(SandboxProvider, cls())
 
 
 def main(argv: Sequence[str] | None = None) -> int:

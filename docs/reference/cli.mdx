@@ -98,7 +98,7 @@ path as `SandboxConfig.bundle`.
 
 | Option | Meaning |
 | --- | --- |
-| `backend` | Deployment backend name, e.g. `docker` or `podman` |
+| `backend` | SandboxProvider backend name, e.g. `docker` or `podman` |
 | `bundle` | Bundle tar produced by `agentix build` |
 | `-n`, `--name` | Optional backend bundle label |
 | `--platform` | Optional runtime platform; defaults to manifest platform |
@@ -138,7 +138,7 @@ agentix plugin list
 ```
 
 `agentix plugin list` enumerates every deployment backend discovered
-through the `agentix.deployment` entry-point group and reports whether
+through the `agentix.provider` entry-point group and reports whether
 each one loaded OK or failed to import. Use it to confirm a backend such
 as `docker` or `podman` is installed and importable before you deploy.
 
