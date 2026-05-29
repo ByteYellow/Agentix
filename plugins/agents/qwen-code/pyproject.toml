@@ -1,0 +1,25 @@
+[project]
+name = "agentix-agent-qwen-code"
+version = "0.1.0"
+description = "qwen-code (Qwen3-Coder CLI) agent integration for Agentix sandboxes"
+requires-python = ">=3.11"
+dependencies = [
+    "agentixx",
+]
+
+[tool.uv.sources]
+agentixx = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "agentix.agents.qwen_code" = "src" }
+packages = ["agentix.agents.qwen_code"]
+
+[tool.agentix]
+nix = "default.nix"
+
+[project.entry-points."agentix.nix"]
+qwen-code = "agentix.agents.qwen_code"
