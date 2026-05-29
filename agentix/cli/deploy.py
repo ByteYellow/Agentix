@@ -96,7 +96,17 @@ def _instantiate_deployment(
     container_bin: str | None,
     run_args: tuple[str, ...],
 ) -> SandboxProvider:
-    cls = cast(Any, providers().get(backend))
+    registry = providers()
+    try:
+        cls = cast(Any, registry.get(backend))
+    except KeyError:
+        available = ", ".join(sorted(registry.all())) or "(none installed)"
+        raise SystemExit(f"unknown deploy backend {backend!r}; available: {available}") from None
+    except Exception as exc:
+        # The name is registered but its plugin failed to import/load; the
+        # registry re-raises the original error. Surface it cleanly instead of
+        # a raw traceback.
+        raise SystemExit(f"deploy backend {backend!r} failed to load: {exc}") from exc
     has_container_options = container_bin is not None or bool(run_args)
     if backend in {"docker", "podman"} or has_container_options:
         try:

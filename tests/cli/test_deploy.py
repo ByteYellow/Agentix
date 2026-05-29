@@ -15,11 +15,15 @@ from agentix.provider.base import MaterializedBundle
 class _Resolver:
     """Stand-in for `providers()` — `.get(name)` returns the resolved class."""
 
-    def __init__(self, fn) -> None:
+    def __init__(self, fn, names: tuple[str, ...] = ()) -> None:
         self._fn = fn
+        self._names = names
 
     def get(self, name: str):
         return self._fn(name)
+
+    def all(self) -> dict[str, object]:
+        return dict.fromkeys(self._names, object())
 
 
 class FakeMaterializer:
@@ -39,6 +43,44 @@ class FakeMaterializer:
             platform=platform,
             metadata={"cache": "/tmp/agentix-runtime-pytest"},
         )
+
+
+def test_deploy_unknown_backend_reports_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle.tar"
+    bundle.write_text("placeholder")
+
+    def _raise(name: str):
+        raise KeyError(f"no plugin {name!r}")
+
+    monkeypatch.setattr(
+        deploy_mod,
+        "providers",
+        lambda: _Resolver(_raise, names=("docker", "podman")),
+    )
+
+    with pytest.raises(SystemExit, match="unknown deploy backend 'bogus'; available: docker, podman"):
+        deploy_mod.main(["bogus", str(bundle)])
+
+
+def test_deploy_broken_backend_reports_load_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle.tar"
+    bundle.write_text("placeholder")
+
+    def _broken(name: str):
+        # Registered name whose plugin fails to load — the registry re-raises
+        # the original (non-KeyError) exception.
+        raise RuntimeError("plugin import boom")
+
+    monkeypatch.setattr(deploy_mod, "providers", lambda: _Resolver(_broken, names=("docker",)))
+
+    with pytest.raises(SystemExit, match="deploy backend 'docker' failed to load: plugin import boom"):
+        deploy_mod.main(["docker", str(bundle)])
 
 
 def test_deploy_invokes_materializer(
