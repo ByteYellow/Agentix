@@ -196,6 +196,40 @@ async def test_host_network_binds_runtime_to_loopback(
     assert "AGENTIX_BIND_HOST=127.0.0.1" in run_call
 
 
+@pytest.mark.asyncio
+async def test_create_removes_container_when_health_check_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    materialized = _materialized_bundle(tmp_path)
+
+    async def fake_docker(
+        *args: str,
+        config: DockerProviderConfig | None = None,
+        check: bool = True,
+        retries: int = 0,
+    ) -> tuple[int, bytes, bytes]:
+        del config, check, retries
+        calls.append(args)
+        return 0, b"", b""
+
+    async def failing_wait(self: DockerProvider, port: int) -> None:
+        raise TimeoutError("runtime never became healthy")
+
+    monkeypatch.setattr(docker_mod, "_docker", fake_docker)
+    monkeypatch.setattr(DockerProvider, "_allocate_port", staticmethod(lambda: 18010))
+    monkeypatch.setattr(DockerProvider, "_wait_healthy", failing_wait)
+
+    deployment = DockerProvider()
+    with pytest.raises(TimeoutError):
+        await deployment.create(SandboxConfig(image="python:3.13-slim", bundle=str(materialized)))
+
+    # The started-but-unhealthy container must be removed and its port released.
+    assert any(call[0] == "rm" and call[1] == "-f" for call in calls), calls
+    assert deployment._ports == {}
+
+
 def test_gpu_args_can_be_overridden_for_podman_cdi() -> None:
     config = DockerProviderConfig(gpu_args=["--device", "nvidia.com/gpu=all", "--label", "gpu-count={gpu}"])
 

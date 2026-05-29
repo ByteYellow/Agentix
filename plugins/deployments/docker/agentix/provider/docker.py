@@ -476,7 +476,16 @@ class DockerProvider(SandboxProvider):
         self._ports[sandbox_id] = port
         logger.info("Created sandbox %s on port %d", sandbox_id, port)
 
-        await self._wait_healthy(port)
+        try:
+            await self._wait_healthy(port)
+        except BaseException:
+            # The container started but never became healthy (bad bundle,
+            # crash loop, slow image) or creation was cancelled. Remove it so a
+            # failed create doesn't orphan a running container and its
+            # published host port — `session()` can't clean up a sandbox it
+            # never received.
+            await self.delete(sandbox_id)
+            raise
         return Sandbox(
             sandbox_id=sandbox_id,
             runtime_url=f"http://localhost:{port}",
