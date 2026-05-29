@@ -15,7 +15,14 @@ from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from .models import RunSpec
-from .views import CatalogView, OverviewView, PlaceholderView, RolloutsView, SandboxesView
+from .views import (
+    CatalogView,
+    ObservabilityView,
+    OverviewView,
+    PlaceholderView,
+    RolloutsView,
+    SandboxesView,
+)
 
 
 class AgentixTUI(App):
@@ -62,6 +69,11 @@ class AgentixTUI(App):
     #sb-title { height: 1; padding: 0 1; }
     #sb-table { height: 1fr; border: round $primary; }
     #sb-explainer { height: auto; padding: 1 1; }
+
+    #obs-title { height: 1; padding: 0 1; }
+    #obs-body { height: 1fr; }
+    #obs-trace { width: 1fr; height: 1fr; border: round $primary; padding: 0 1; }
+    #obs-log { width: 1fr; height: 1fr; border: round $primary; padding: 0 1; }
     """
 
     BINDINGS = [
@@ -99,5 +111,5 @@ class AgentixTUI(App):
             with TabPane("Build", id="build"):
                 yield PlaceholderView("Build", "Trigger and stream `agentix build` bundles.")
             with TabPane("Observability", id="observability"):
-                yield PlaceholderView("Observability", "Live /trace spans and /log streams from running sandboxes.")
+                yield ObservabilityView()
         yield Footer()

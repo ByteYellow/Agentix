@@ -6,6 +6,7 @@ from eval_tui.app import AgentixTUI
 from eval_tui.demo import DemoAgent, DemoDataset, DemoProvider
 from eval_tui.models import RunSpec
 from eval_tui.views.catalog import discover_catalog
+from eval_tui.views.observability import ObservabilityView
 from eval_tui.views.overview import OverviewView
 from eval_tui.views.rollouts import RolloutsView
 from textual.widgets import DataTable
@@ -73,6 +74,14 @@ async def test_sandboxes_view_lists_backends() -> None:
         await pilot.pause()
         table = app.query_one("#sb-table", DataTable)
         assert table.row_count == 5  # docker, podman, apptainer, daytona, e2b
+
+
+async def test_observability_demo_streams_events() -> None:
+    app = AgentixTUI(rollout_spec=None)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.query_one(ObservabilityView)._emitted > 0
 
 
 def test_discover_catalog_finds_agentix_distributions() -> None:
