@@ -75,17 +75,54 @@ def detect_python_version(pyproject: dict) -> str:
     req = pyproject.get("project", {}).get("requires-python", "")
     if not isinstance(req, str):
         return _DEFAULT_PY
-    for token in req.replace(",", " ").split():
-        token = token.lstrip(">=~^! ")
-        if not token.startswith("3."):
+    tokens = req.replace(",", " ").split()
+
+    chosen: int | None = None
+    for token in tokens:
+        stripped = token.lstrip(">=~^! ")
+        if not stripped.startswith("3."):
             continue
         try:
-            minor = int(token.split(".")[1].rstrip(".*"))
+            minor = int(stripped.split(".")[1].rstrip(".*"))
         except (ValueError, IndexError):
             continue
         if minor in _SUPPORTED_PY_MINORS:
-            return f"3{minor}"
-    return _DEFAULT_PY
+            chosen = minor
+            break
+
+    if chosen is None:
+        chosen = int(_DEFAULT_PY[1:])
+
+    # Respect an explicit upper bound: the lower-bound pick (or the default)
+    # must not reach a version the project excludes — e.g. `>=3.9,<3.11` would
+    # otherwise default to 3.11 and violate `<3.11`.
+    excluded_at = _upper_bound_minor(tokens)
+    if excluded_at is not None and chosen >= excluded_at:
+        below = [m for m in _SUPPORTED_PY_MINORS if m < excluded_at]
+        if below:
+            chosen = below[-1]
+
+    return f"3{chosen}"
+
+
+def _upper_bound_minor(tokens: list[str]) -> int | None:
+    """The smallest 3.x minor *excluded* by an explicit upper bound, or None.
+
+    `<3.11` excludes 3.11 → 11; `<=3.11` allows 3.11 → 12.
+    """
+    for token in tokens:
+        for op, inclusive in (("<=", True), ("<", False)):
+            if not token.startswith(op):
+                continue
+            rest = token[len(op) :].lstrip()
+            if not rest.startswith("3."):
+                break
+            try:
+                minor = int(rest.split(".")[1].rstrip(".*"))
+            except (ValueError, IndexError):
+                break
+            return minor + 1 if inclusive else minor
+    return None
 
 
 def project_nix(pyproject: dict) -> str | None:

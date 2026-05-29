@@ -99,6 +99,11 @@ class TestDetectPythonVersion:
             (">=3.13,<3.14", "313"),
             ("==3.12.*", "312"),
             ("~=3.11", "311"),
+            # An upper bound must be respected: a below-floor lower bound would
+            # otherwise default to 3.11 and violate `<3.11`.
+            (">=3.9,<3.11", "310"),
+            (">=3.11,<3.12", "311"),
+            (">=3.9,<=3.12", "311"),
         ],
     )
     def test_parsed_from_requires_python(self, requires: str, expected: str) -> None:
