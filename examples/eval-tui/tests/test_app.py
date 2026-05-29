@@ -6,6 +6,7 @@ from eval_tui.app import AgentixTUI
 from eval_tui.demo import DemoAgent, DemoDataset, DemoProvider
 from eval_tui.models import RunSpec
 from eval_tui.views.catalog import discover_catalog
+from eval_tui.views.overview import OverviewView
 from eval_tui.views.rollouts import RolloutsView
 from textual.widgets import DataTable
 
@@ -55,6 +56,14 @@ async def test_rollouts_drilldown_shows_instance_detail() -> None:
 
         assert "demo__task-000" in view._detail_text
         assert "verdict" in view._detail_text  # a finished instance renders its verdict
+
+
+async def test_overview_dashboard_shows_ecosystem_counts() -> None:
+    app = AgentixTUI(rollout_spec=None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        overview = app.query_one(OverviewView)
+        assert overview._counts["packages"] >= 1  # at least agentixx is installed
 
 
 def test_discover_catalog_finds_agentix_distributions() -> None:

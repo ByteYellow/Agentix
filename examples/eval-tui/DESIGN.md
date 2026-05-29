@@ -35,10 +35,17 @@ AgentixTUI(App)                      # shell: Header + TabbedContent + Footer, t
 Each area is a self-contained view widget with its own demo/empty state, so the
 app is useful (and testable headlessly) with no runtime attached.
 
+## Rubric addendum (v2)
+
+| # | Dimension | "Advanced" looks like |
+|---|-----------|------------------------|
+| 11 | **Aesthetics** | A landing dashboard that's genuinely beautiful — branded gradient banner, ecosystem stat cards, cohesive theme; a "sexy" first impression |
+
 ## Iteration log
 
 - **PR-A** — app shell (TabbedContent nav) + **Catalog** view (real entry-point /
-  distribution introspection) + this rubric doc + theming. Raises Coverage 1→2,
-  IA 1→4, Visual 3→4.
-- **PR-B+** — Sandboxes, Build, Observability views; command palette; search;
-  per-view pilot tests; polish.
+  distribution introspection) + this rubric doc + theming. Coverage 1→2, IA 1→4, Visual 3→4.
+- **drill-down** — Rollouts instance detail pane (verdict/duration/score/error). Interaction 3→4.
+- **Overview dashboard** — branded gradient banner + live ecosystem stat cards +
+  environment readiness as the landing tab; branded Textual theme. Aesthetics →4, Polish →4.
+- **next** — Sandboxes, Build, Observability views; command palette; search/filter.

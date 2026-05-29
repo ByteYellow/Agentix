@@ -15,7 +15,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from .models import RunSpec
-from .views import CatalogView, PlaceholderView, RolloutsView
+from .views import CatalogView, OverviewView, PlaceholderView, RolloutsView
 
 
 class AgentixTUI(App):
@@ -45,6 +45,19 @@ class AgentixTUI(App):
     #catalog-table { height: 1fr; border: round $primary; }
 
     #placeholder { text-align: center; width: auto; }
+
+    #ov-banner { height: auto; padding: 1 2; content-align: center middle; text-align: center; }
+    #ov-cards { height: 7; padding: 0 1; }
+    .ov-card {
+        width: 1fr;
+        height: 5;
+        border: round $primary;
+        padding: 1 1;
+        margin: 0 1;
+        content-align: center middle;
+        text-align: center;
+    }
+    #ov-hints { height: auto; padding: 1 2; }
     """
 
     BINDINGS = [
@@ -55,9 +68,24 @@ class AgentixTUI(App):
         super().__init__()
         self._spec = rollout_spec
 
+    def on_mount(self) -> None:
+        # Best-effort branded theme; falls back to the default if the running
+        # Textual version's theme API differs.
+        try:
+            from textual.theme import Theme
+
+            self.register_theme(
+                Theme(name="agentix", primary="#cc785c", secondary="#a45a45", accent="#e08a6d", dark=True)
+            )
+            self.theme = "agentix"
+        except Exception:
+            pass
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with TabbedContent(initial="rollouts"):
+        with TabbedContent(initial="overview"):
+            with TabPane("Overview", id="overview"):
+                yield OverviewView()
             with TabPane("Rollouts", id="rollouts"):
                 yield RolloutsView(self._spec)
             with TabPane("Catalog", id="catalog"):
