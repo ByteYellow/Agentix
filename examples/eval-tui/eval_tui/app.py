@@ -37,7 +37,9 @@ class AgentixTUI(App):
     }
     #rollouts-body { height: 1fr; }
     #rollouts-table { width: 3fr; height: 1fr; border: round $primary; }
-    #rollouts-log { width: 2fr; height: 1fr; border: round $primary; padding: 0 1; }
+    #rollouts-side { width: 2fr; height: 1fr; }
+    #rollouts-detail { height: 2fr; border: round $primary; padding: 0 1; }
+    #rollouts-log { height: 3fr; border: round $primary; padding: 0 1; }
 
     #catalog-title { height: 1; padding: 0 1; }
     #catalog-table { height: 1fr; border: round $primary; }

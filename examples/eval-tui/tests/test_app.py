@@ -45,6 +45,18 @@ async def test_tui_idle_without_spec_does_not_crash() -> None:
         assert app.query_one("#catalog-table", DataTable).row_count >= 1
 
 
+async def test_rollouts_drilldown_shows_instance_detail() -> None:
+    app = AgentixTUI(rollout_spec=_demo_spec(6))
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        view = app.query_one(RolloutsView)
+        view.query_one("#rollouts-table", DataTable).move_cursor(row=0)
+        await pilot.pause()
+
+        assert "demo__task-000" in view._detail_text
+        assert "verdict" in view._detail_text  # a finished instance renders its verdict
+
+
 def test_discover_catalog_finds_agentix_distributions() -> None:
     rows = discover_catalog()
     names = {name for name, *_ in rows}

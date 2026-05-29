@@ -1,9 +1,10 @@
 """Rollouts view — a live batch-rollout dashboard over `agentix.runner`.
 
 Per-instance phase grid (pending -> setup -> agent -> scoring -> PASS/FAIL/skip/
-error), a live summary bar, and an event log. Phase transitions are observed by
-wrapping the dataset/agent adapters (see `.._adapters`), so `agentix.runner` is
-unchanged. With no `RunSpec` the view shows an idle state (other tabs still work).
+error), a live summary bar, an event log, and a **detail pane** that drills into
+the highlighted instance. Phase transitions are observed by wrapping the
+dataset/agent adapters (see `.._adapters`), so `agentix.runner` is unchanged.
+With no `RunSpec` the view shows an idle state (other tabs still work).
 """
 
 from __future__ import annotations
@@ -38,12 +39,18 @@ class RolloutsView(Vertical):
         self._resolved = 0
         self._failed = 0
         self._running = 0
+        self._results: dict[str, Rollout] = {}
+        self._phase_of: dict[str, str] = {}
+        self._selected: str | None = None
+        self._detail_text = ""  # plain text of the detail pane (for tests/inspection)
 
     def compose(self):
         yield Static(id="rollouts-summary")
         with Horizontal(id="rollouts-body"):
             yield DataTable(id="rollouts-table", zebra_stripes=True, cursor_type="row")
-            yield RichLog(id="rollouts-log", markup=True, wrap=True)
+            with Vertical(id="rollouts-side"):
+                yield Static(id="rollouts-detail")
+                yield RichLog(id="rollouts-log", markup=True, wrap=True)
 
     def on_mount(self) -> None:
         table = self.query_one("#rollouts-table", DataTable)
@@ -51,6 +58,9 @@ class RolloutsView(Vertical):
         table.add_column("Status", key="status", width=16)
         table.add_column("Time", key="time", width=9)
         table.add_column("Result", key="result")
+        self.query_one("#rollouts-detail", Static).update(
+            Text("Select an instance to inspect.", style="dim")
+        )
 
         if self._spec is None or not self._instances:
             self.query_one("#rollouts-summary", Static).update(
@@ -61,6 +71,7 @@ class RolloutsView(Vertical):
 
         for inst in self._instances:
             iid = instance_id(inst)
+            self._phase_of[iid] = "pending"
             table.add_row(iid, _phase("pending"), "", "", key=iid)
         self._t0 = time.monotonic()
         self._refresh_summary()
@@ -86,12 +97,16 @@ class RolloutsView(Vertical):
     def _on_phase(self, iid: str, phase: str) -> None:
         if phase == "setup":
             self._running += 1
+        self._phase_of[iid] = phase
         self._set_cell(iid, "status", _phase(phase))
+        if iid == self._selected:
+            self._render_detail(iid)
         self._refresh_summary()
 
     def _on_result(self, rollout: Rollout) -> None:
         self._running = max(0, self._running - 1)
         self._done += 1
+        self._results[rollout.instance_id] = rollout
         if rollout.resolved:
             self._resolved += 1
             label, style, result = "✓ PASS", "bold green", "resolved"
@@ -110,7 +125,41 @@ class RolloutsView(Vertical):
         self.query_one("#rollouts-log", RichLog).write(
             f"[{style}]{label}[/] {rollout.instance_id} · {rollout.duration_s:.1f}s"
         )
+        if rollout.instance_id == self._selected:
+            self._render_detail(rollout.instance_id)
         self._refresh_summary()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        key = event.row_key.value
+        if key is not None:
+            self._selected = str(key)
+            self._render_detail(self._selected)
+
+    def _render_detail(self, iid: str) -> None:
+        text = self._detail_for(iid)
+        self._detail_text = text.plain
+        self.query_one("#rollouts-detail", Static).update(text)
+
+    def _detail_for(self, iid: str) -> Text:
+        rollout = self._results.get(iid)
+        if rollout is None:
+            phase = self._phase_of.get(iid, "pending")
+            label, style = _PHASE.get(phase, (phase, "white"))
+            return Text.assemble((f"{iid}\n\n", "bold"), ("status: ", "dim"), (label, style))
+        lines: list[tuple[str, str] | str] = [(f"{iid}\n\n", "bold")]
+        verdict = "PASS" if rollout.resolved else (rollout.skipped or ("error" if rollout.error else "FAIL"))
+        verdict_style = "bold green" if rollout.resolved else "bold red"
+        lines += [("verdict: ", "dim"), (f"{verdict}\n", verdict_style)]
+        lines += [("duration: ", "dim"), (f"{rollout.duration_s:.1f}s\n", "")]
+        lines += [("agent exit: ", "dim"), (f"{rollout.agent_exit}\n", "")]
+        lines += [("patch: ", "dim"), (f"{len(rollout.patch)} bytes\n", "")]
+        if rollout.score:
+            lines += [("\nscore:\n", "dim")]
+            for k, v in list(rollout.score.items())[:8]:
+                lines += [(f"  {k}: ", "dim"), (f"{_short(v)}\n", "")]
+        if rollout.error:
+            lines += [("\nerror:\n", "dim"), (rollout.error[:300], "red")]
+        return Text.assemble(*lines)
 
     def _set_cell(self, iid: str, column: str, value: object) -> None:
         try:
@@ -139,6 +188,11 @@ class RolloutsView(Vertical):
             (f"{rate:.1f}/min", "dim"),
         )
         self.query_one("#rollouts-summary", Static).update(text)
+
+
+def _short(value: object, limit: int = 40) -> str:
+    text = str(value)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _phase(phase: str) -> Text:
