@@ -15,7 +15,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from .models import RunSpec
-from .views import CatalogView, OverviewView, PlaceholderView, RolloutsView
+from .views import CatalogView, OverviewView, PlaceholderView, RolloutsView, SandboxesView
 
 
 class AgentixTUI(App):
@@ -58,6 +58,10 @@ class AgentixTUI(App):
         text-align: center;
     }
     #ov-hints { height: auto; padding: 1 2; }
+
+    #sb-title { height: 1; padding: 0 1; }
+    #sb-table { height: 1fr; border: round $primary; }
+    #sb-explainer { height: auto; padding: 1 1; }
     """
 
     BINDINGS = [
@@ -91,10 +95,7 @@ class AgentixTUI(App):
             with TabPane("Catalog", id="catalog"):
                 yield CatalogView()
             with TabPane("Sandboxes", id="sandboxes"):
-                yield PlaceholderView(
-                    "Sandboxes",
-                    "Open a live sandbox over a provider and call client.remote(...) interactively.",
-                )
+                yield SandboxesView()
             with TabPane("Build", id="build"):
                 yield PlaceholderView("Build", "Trigger and stream `agentix build` bundles.")
             with TabPane("Observability", id="observability"):

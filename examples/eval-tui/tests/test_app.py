@@ -66,6 +66,15 @@ async def test_overview_dashboard_shows_ecosystem_counts() -> None:
         assert overview._counts["packages"] >= 1  # at least agentixx is installed
 
 
+async def test_sandboxes_view_lists_backends() -> None:
+    app = AgentixTUI(rollout_spec=None)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()  # readiness probe worker
+        await pilot.pause()
+        table = app.query_one("#sb-table", DataTable)
+        assert table.row_count == 5  # docker, podman, apptainer, daytona, e2b
+
+
 def test_discover_catalog_finds_agentix_distributions() -> None:
     rows = discover_catalog()
     names = {name for name, *_ in rows}
