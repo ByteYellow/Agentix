@@ -119,14 +119,18 @@ class Registry(Generic[T]):
         items: dict[str, T] = {}
         sources: dict[str, PluginSource] = {}
         errors: dict[str, Exception] = {}
+        seen: dict[str, PluginSource] = {}
 
         # Entry-point pass first. Two dists declaring the same name is
         # ambiguous and must surface — they'd silently last-wins otherwise.
+        # Detect conflicts off every name encountered (`seen`), not just the
+        # ones that loaded: a broken first dist must not mask a duplicate.
         for name, loader, src in self._walk_entry_points():
-            if name in sources:
+            if name in seen:
                 raise PluginConflictError(
-                    f"duplicate plugin {name!r} in group {self._group!r}: {sources[name].label()} vs {src.label()}"
+                    f"duplicate plugin {name!r} in group {self._group!r}: {seen[name].label()} vs {src.label()}"
                 )
+            seen[name] = src
             try:
                 items[name] = loader()
                 sources[name] = src

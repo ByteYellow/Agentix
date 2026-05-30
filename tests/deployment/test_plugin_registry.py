@@ -97,6 +97,28 @@ def test_entry_point_duplicate_raises_conflict():
     assert "dist-b@2.0" in msg
 
 
+def test_duplicate_conflict_detected_when_first_loader_fails():
+    """A duplicate name must surface even if the first dist's loader raises —
+    otherwise a broken stale install silently masks the conflict."""
+
+    def bad_loader():
+        raise RuntimeError("kaboom")
+
+    reg = Registry("test.axis")
+    _patch_eps(
+        reg,
+        [
+            _fake_ep("local", bad_loader, "dist-a", "1.0"),
+            _fake_ep("local", lambda: "b", "dist-b", "2.0"),
+        ],
+    )
+    with pytest.raises(PluginConflictError) as excinfo:
+        reg.all()
+    msg = str(excinfo.value)
+    assert "dist-a@1.0" in msg
+    assert "dist-b@2.0" in msg
+
+
 def test_loader_failure_does_not_poison_others():
     """A plugin whose loader raises is cached as an error; sibling plugins
     still load."""
