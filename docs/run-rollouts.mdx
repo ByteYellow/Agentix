@@ -1,0 +1,101 @@
+---
+title: Run rollouts
+description: Run an agent over a dataset across sandboxes with the batch runner.
+---
+
+`agentix.runner` runs an agent over a dataset of instances — each inside its
+own sandbox — and returns a typed `Rollout` per instance. It is the reusable
+form of the per-instance choreography you would otherwise hand-write: set up
+the task, run the agent, score the result. An RL or eval loop calls
+`run_rollouts(...)` directly; the `agentix-run` CLI wraps the same function.
+
+```python
+from agentix.runner import run_rollouts
+
+rollouts = await run_rollouts(
+    dataset=my_dataset,    # implements agentix.runner.Dataset
+    agent=my_agent,        # implements agentix.runner.Agent
+    provider=provider,     # any SandboxProvider
+    bundle="eval:0.1.0",   # produced by `agentix build`
+    model="claude-3-5-sonnet-latest",
+    n_concurrent=8,
+)
+resolved = sum(r.resolved for r in rollouts)
+```
+
+## What it does
+
+For each instance, two sandboxes back to back:
+
+1. **Agent sandbox** — `dataset.setup(sandbox, instance)` prepares the task,
+   then `agent.solve(sandbox, instance, model=...)` produces a patch.
+2. **Score sandbox** (fresh) — `dataset.score(sandbox, instance, patch)` grades
+   it, so scoring always starts from a clean task image.
+
+Results come back in input order, bounded by `n_concurrent`. A failure in one
+instance is recorded on its `Rollout.error` and never aborts the batch.
+
+The runner is built only on the stable surface — `provider.session(config)`
+for sandboxes and `sandbox.remote(fn, ...)` for in-sandbox calls (plus the
+`bundle`). It carries no benchmark- or agent-specific logic.
+
+## Adapters
+
+A dataset and an agent plug in through two small Protocols.
+
+```python
+class Dataset(Protocol):
+    def instances(self) -> Iterable[dict]: ...
+    def image(self, instance: dict) -> str: ...
+    async def setup(self, sandbox, instance: dict) -> bool: ...
+    async def score(self, sandbox, instance: dict, patch: str) -> dict: ...
+
+class Agent(Protocol):
+    async def solve(self, sandbox, instance: dict, *, model: str | None) -> AgentResult: ...
+```
+
+`setup`/`score` and `solve` receive the live sandbox, so they drive work with
+`sandbox.remote(fn, ...)` — for example the `agentix.plugins.datasets.swe`
+`prepare_env` / `score` functions, or an agent's `run` callable. The adapter
+owns any agent-specific wiring (LLM bridge, model selection, patch
+extraction); see [Integrate an agent](/integrate-agent) and
+[Integrate a dataset](/integrate-dataset).
+
+## Result
+
+```python
+@dataclass
+class Rollout:
+    instance_id: str
+    patch: str
+    score: dict | None
+    agent_exit: int | None
+    error: str | None
+    skipped: str | None      # "setup_failed" | "empty_patch"
+    duration_s: float
+
+    @property
+    def resolved(self) -> bool: ...   # True when score["resolved"] is truthy
+```
+
+## CLI
+
+The library is the real interface; `agentix-run` is a thin wrapper for manual
+runs that resolves `module:attr` adapters and a provider backend:
+
+```bash
+agentix-run \
+    --dataset my_pkg:dataset \
+    --agent my_pkg:agent \
+    --provider docker \
+    --bundle eval:0.1.0 \
+    --model claude-3-5-sonnet-latest \
+    --n-concurrent 8 --out runs/
+```
+
+## Worked example
+
+[`examples/run-swe-rollouts`](https://github.com/Agentiix/Agentix/tree/master/examples/run-swe-rollouts)
+runs SWE-bench through the runner with a `SweDataset` + `ClaudeCodeAgent`
+adapter; `--ground-truth` swaps in a gold-patch agent that reuses the same
+scoring path.

@@ -25,7 +25,7 @@
       },
       {
         "group": "How-to",
-        "pages": ["integrate-agent", "integrate-dataset"]
+        "pages": ["integrate-agent", "integrate-dataset", "run-rollouts"]
       },
       {
         "group": "Reference",
