@@ -16,6 +16,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
+from .help import HelpScreen
 from .models import RunSpec
 from .views import (
     BuildView,
@@ -93,6 +94,7 @@ class AgentixTUI(App):
         ("6", "show_tab('observability')", "Obs"),
         ("s", "save", "Save"),
         ("t", "cycle_theme", "Theme"),
+        ("question_mark", "help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -109,6 +111,13 @@ class AgentixTUI(App):
             return
         path = view.export_to(Path.cwd() / "agentix-rollouts.json")
         self.notify(f"saved {len(payload['rollouts'])} rollouts → {path.name}", timeout=3)
+
+    def action_help(self) -> None:
+        """Toggle the key-binding cheatsheet."""
+        if isinstance(self.screen, HelpScreen):
+            self.pop_screen()
+        else:
+            self.push_screen(HelpScreen())
 
     def on_mount(self) -> None:
         # Build the set of cycleable themes: a best-effort branded theme (falls

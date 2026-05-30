@@ -7,6 +7,7 @@ from pathlib import Path
 
 from eval_tui.app import AgentixTUI
 from eval_tui.demo import DemoAgent, DemoDataset, DemoProvider
+from eval_tui.help import HelpScreen, _binding_rows
 from eval_tui.models import RunSpec
 from eval_tui.views.build import BuildView
 from eval_tui.views.catalog import CatalogView, discover_catalog
@@ -120,6 +121,35 @@ async def test_theme_cycle_changes_theme() -> None:
         await pilot.pause()
         assert app.theme != first
         assert app.theme in app._themes
+
+
+async def test_help_overlay_toggles() -> None:
+    app = AgentixTUI(rollout_spec=None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+
+
+def test_help_rows_match_real_bindings() -> None:
+    # The overlay is derived from the app's BINDINGS, so every advertised key
+    # must map to a real binding (regression guard against a phantom row).
+    rows = _binding_rows(AgentixTUI.BINDINGS)
+    keys = {key for key, _ in rows}
+    descriptions = {desc for _, desc in rows}
+    bound_keys = {b[0] for b in AgentixTUI.BINDINGS}
+
+    assert {"Help", "Quit", "Overview"} <= descriptions
+    assert "?" in keys  # question_mark normalized for display
+    assert "t" in keys  # theme switcher is bound on this stack, so it's listed
+    # Every advertised key corresponds to a real binding (allowing the
+    # display-normalized '?' for 'question_mark').
+    for key in keys:
+        assert key in bound_keys or key == "?"
 
 
 async def test_build_view_constructs_command_from_path() -> None:
