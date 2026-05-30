@@ -17,9 +17,14 @@ that point every plugin is installed and introspectable, so this step:
   3. Stages every `.nix` file into `closures/`, where the flake's
      `runtime` output imports and `symlinkJoin`s them.
 
-Plugin discovery is import-free: `importlib.metadata.entry_points`
-reads `.dist-info/entry_points.txt`; `importlib.resources` locates the
-file. Neither imports plugin code — safe to run over an arbitrary venv.
+Plugin discovery walks `importlib.metadata.entry_points` (reading
+`.dist-info/entry_points.txt`) and locates each closure's `default.nix`
+as package data. An editable / workspace install is resolved from its
+`direct_url.json` without importing; for a wheel / registry install,
+`importlib.resources` imports the entry-point module to find its data
+dir. A plugin whose `direct_url.json` is malformed or whose module fails
+to import is skipped (logged), never fatal — discovery of the rest
+continues.
 
 Invoked from `bundle-build.sh` as:
 
@@ -34,6 +39,7 @@ from __future__ import annotations
 
 import importlib.metadata as md
 import json
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib import resources
@@ -43,6 +49,8 @@ from urllib.parse import unquote, urlparse
 import click
 
 from agentix.cli.build.pyproject import project_nix, read_pyproject
+
+logger = logging.getLogger("agentix.cli.build.closures")
 
 # Entry-point group a plugin registers to declare it ships a Nix
 # closure. The entry-point *value* is the module under which a
@@ -95,8 +103,15 @@ def discover_plugin_closures() -> list[Closure]:
 def _plugin_nix_file(ep: md.EntryPoint):
     dist = getattr(ep, "dist", None)
     direct_url = dist.read_text("direct_url.json") if dist is not None else None
-    if direct_url is not None:
-        parsed = urlparse(json.loads(direct_url).get("url", ""))
+    if direct_url:
+        # `direct_url.json` is occasionally malformed (older installers); a
+        # parse failure must not abort discovery — fall through to package data.
+        try:
+            url = json.loads(direct_url).get("url", "")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            logger.warning("ignoring malformed direct_url.json for %r", ep.value)
+            url = ""
+        parsed = urlparse(url)
         if parsed.scheme == "file":
             project_dir = Path(unquote(parsed.path)).resolve()
             if (project_dir / "pyproject.toml").is_file():
@@ -104,11 +119,15 @@ def _plugin_nix_file(ep: md.EntryPoint):
                 if rel is not None:
                     return (project_dir / rel).resolve()
 
+    # Locating package data imports the entry-point module (this is also what
+    # resolves editable installs). A plugin with a heavy or broken top-level
+    # import must be skipped, not abort discovery of every other closure.
     try:
         nix_file = resources.files(ep.value) / CLOSURE_FILENAME
-    except (ModuleNotFoundError, TypeError):
+        return nix_file if nix_file.is_file() else None
+    except Exception:
+        logger.warning("skipping plugin %r: could not locate its package data", ep.value, exc_info=True)
         return None
-    return nix_file if nix_file.is_file() else None
 
 
 def discover_project_closure(project_dir: Path) -> Closure | None:

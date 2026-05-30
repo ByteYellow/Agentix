@@ -929,6 +929,47 @@ class TestDiscoverPluginClosures:
         labels = [c.label for c in found]
         assert len(labels) == len(set(labels))
 
+    def test_plugin_nix_file_tolerates_malformed_direct_url(self) -> None:
+        from agentix.cli.build import closures
+
+        class _Dist:
+            def read_text(self, name: str) -> str:
+                return "{ not valid json"
+
+        class _EP:
+            dist = _Dist()
+            value = "agentix.cli.build.closures"  # importable, ships no default.nix
+
+        # Malformed direct_url.json must not raise; falls through to package
+        # data, which this module doesn't have -> None.
+        assert closures._plugin_nix_file(_EP()) is None  # type: ignore[arg-type]
+
+    def test_plugin_nix_file_skips_unimportable_module(self) -> None:
+        from agentix.cli.build import closures
+
+        class _EP:
+            dist = None
+            value = "definitely.not.a.real.module.xyz"
+
+        assert closures._plugin_nix_file(_EP()) is None  # type: ignore[arg-type]
+
+    def test_plugin_nix_file_skips_module_that_raises_on_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A plugin whose top-level import raises something other than
+        # ModuleNotFoundError must be skipped, not abort discovery — this
+        # exercises the broadened `except` (the old code only caught
+        # ModuleNotFoundError / TypeError and would propagate this).
+        (tmp_path / "boom_plugin.py").write_text("raise RuntimeError('import boom')\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        from agentix.cli.build import closures
+
+        class _EP:
+            dist = None
+            value = "boom_plugin"
+
+        assert closures._plugin_nix_file(_EP()) is None  # type: ignore[arg-type]
+
 
 # ── closures: project closure ──────────────────────────────────────
 
