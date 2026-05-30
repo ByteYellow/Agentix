@@ -35,6 +35,12 @@ from agentix.runtime.shared.models import RemoteError, RemoteRequest
 logger = logging.getLogger("agentix.runtime.sio")
 RPC_NAMESPACE = "/rpc"
 
+# Cap on the unacked-result cache. A host that completes calls and never acks
+# (a crashed or buggy client) would otherwise pin every result — each holding a
+# full pickled return value, up to MAX_MESSAGE_BYTES — in memory forever. Past
+# the cap, the oldest unacked entry is evicted.
+_MAX_PENDING_RESULTS = 4096
+
 
 def _u(data: Any) -> dict:
     if not data:
@@ -71,6 +77,26 @@ def _cancelled_error(call_id: str) -> dict[str, Any]:
             cancelled=True,
         ).model_dump(),
     }
+
+
+def _store_pending_result(
+    cache: dict[str, tuple[str, dict[str, Any]]],
+    call_id: str,
+    value: tuple[str, dict[str, Any]],
+    *,
+    cap: int = _MAX_PENDING_RESULTS,
+) -> str | None:
+    """Store a completed result, evicting the oldest entry once `cache` exceeds
+    `cap`. Returns the evicted call_id (for the caller to log), else None.
+
+    Relies on dict insertion order: each call_id is stored once, so the first
+    key is the oldest unacked result."""
+    cache[call_id] = value
+    if len(cache) > cap:
+        oldest = next(iter(cache))
+        cache.pop(oldest, None)
+        return oldest
+    return None
 
 
 def make_sio(
@@ -117,6 +143,7 @@ def make_sio(
     # and we replay any unacked results for the call_ids it cares
     # about — without ever re-running `fn`.
     pending_results: dict[str, tuple[str, dict[str, Any]]] = {}
+    evictions = 0  # count of cap evictions, for throttled warning
     opened_namespaces: set[str] = set()  # paths the worker has opened
 
     async def _execute_call(payload: dict[str, Any], call_id: str) -> tuple[str, dict[str, Any]]:
@@ -152,6 +179,7 @@ def make_sio(
         return "call:error", {"call_id": call_id, "error": error}
 
     async def _emit_task_result(task: asyncio.Task, call_id: str) -> None:
+        nonlocal evictions
         if task.cancelled():
             return
         try:
@@ -167,7 +195,18 @@ def make_sio(
         # Store first, emit second. If the host is currently disconnected
         # the emit is a no-op and the cached entry carries the result
         # through to the next `resume`.
-        pending_results[call_id] = (event, frame)
+        evicted = _store_pending_result(pending_results, call_id, (event, frame))
+        if evicted is not None:
+            evictions += 1
+            # Throttle: warn on the first eviction and periodically after, so
+            # sustained overflow doesn't spam a line per completed call.
+            if evictions == 1 or evictions % 1000 == 0:
+                logger.warning(
+                    "pending_results over cap (%d); evicted oldest unacked result(s) "
+                    "(total evicted=%d) — a host is completing calls without acking",
+                    _MAX_PENDING_RESULTS,
+                    evictions,
+                )
         with contextlib.suppress(BaseException):
             await sio.emit(event, pack(frame), namespace=RPC_NAMESPACE)
 
