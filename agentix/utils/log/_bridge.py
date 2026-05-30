@@ -117,8 +117,29 @@ _STD_RECORD_KEYS = frozenset(
 )
 
 
+def _coerce_extra(value: Any) -> Any:
+    """Make a user-supplied `extra` value safe to msgpack-encode.
+
+    A non-encodable value (an arbitrary object, `Decimal`, …) would otherwise
+    fail to pack on the outbound drainer, which drops the whole frame and loses
+    the record. Reduce anything that isn't a msgpack-native scalar/container to
+    `repr()` so the record always survives as text.
+    """
+    if value is None or isinstance(value, (str, bool, int, float, bytes)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_coerce_extra(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _coerce_extra(v) for k, v in value.items()}
+    return repr(value)
+
+
 def _record_payload(record: logging.LogRecord) -> dict[str, Any]:
-    extras = {k: v for k, v in record.__dict__.items() if k not in _STD_RECORD_KEYS and not k.startswith("_")}
+    extras = {
+        k: _coerce_extra(v)
+        for k, v in record.__dict__.items()
+        if k not in _STD_RECORD_KEYS and not k.startswith("_")
+    }
     return {
         "name": record.name,
         "level": record.levelname,
