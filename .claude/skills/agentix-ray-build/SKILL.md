@@ -62,8 +62,9 @@ agentix build <project> --container-engine podman --platform linux/amd64 \
 The sandbox container *does* start, so it **does** need the cgroup/netns workaround as
 **run-args**: `--runtime=crun --cgroups=disabled --network=host`. With `--network=host`
 the runtime server binds a host port (reach it at `127.0.0.1:<port>`, no mapping). Wire
-them via `agentix deploy podman <tar> --run-arg --runtime=crun --run-arg --cgroups=disabled
---run-arg --network=host`, or the provider's run-arg config when orchestrating in-process.
+them via `agentix deploy podman <tar> --run-arg=--runtime=crun --run-arg=--cgroups=disabled
+--run-arg=--network=host`, or the provider's run-arg config when orchestrating in-process.
+(Use the `--run-arg=VALUE` form — values that start with `--` break argparse otherwise.)
 
 > Trade-offs of these run-args: `--network=host` removes network isolation; `--cgroups=disabled`
 > removes resource limits. Fine for trusted single-tenant eval/RL; not for multi-tenant.

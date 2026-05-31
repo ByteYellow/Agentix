@@ -26,5 +26,5 @@ uv run python main.py --bundle <bundle-ref> --model gpt-4o \
 ```
 
 On a restricted rootless-podman host, add `--container-engine podman --network host
---run-arg --runtime=crun --run-arg --cgroups=disabled` (see the `agentix-ray-build`
+--run-arg=--runtime=crun --run-arg=--cgroups=disabled` (see the `agentix-ray-build`
 skill).

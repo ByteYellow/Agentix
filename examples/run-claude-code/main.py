@@ -9,7 +9,7 @@ at the bridge's in-sandbox service URL. Every call is captured into
     agentix build .
     OPENAI_API_KEY=... uv run python main.py --bundle <ref> \
         --container-engine podman --network host \
-        --run-arg --runtime=crun --run-arg --cgroups=disabled
+        --run-arg=--runtime=crun --run-arg=--cgroups=disabled
 """
 
 from __future__ import annotations
