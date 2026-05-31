@@ -11,6 +11,28 @@ import pkgutil
 
 __path__ = pkgutil.extend_path(__path__, __name__)
 
-from agentix.provider.base import BundleDeployer, DeployedBundle, SandboxProvider
+from agentix.provider.base import (
+    BundleDeployer,
+    DeployedBundle,
+    Sandbox,
+    SandboxConfig,
+    SandboxId,
+    SandboxInfo,
+    SandboxProvider,
+    SandboxResource,
+    providers,
+    register_provider,
+)
 
-__all__ = ["BundleDeployer", "DeployedBundle", "SandboxProvider"]
+__all__ = [
+    "BundleDeployer",
+    "DeployedBundle",
+    "Sandbox",
+    "SandboxConfig",
+    "SandboxId",
+    "SandboxInfo",
+    "SandboxProvider",
+    "SandboxResource",
+    "providers",
+    "register_provider",
+]
