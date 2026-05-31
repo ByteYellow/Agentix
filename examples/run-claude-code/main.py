@@ -92,6 +92,10 @@ async def main() -> None:
             api_key="sk-abridge",
         ))
 
+    if args.otlp_endpoint:
+        from agentix.utils import trace
+        trace.force_flush()  # push batched spans to the OTLP backend before exit
+
     print(f"\nclaude returncode={result.returncode}")
     traj = bridge.store.trajectory(bridge.session_id)
     print(f"{len(traj)} LLM call(s) captured for session {bridge.session_id}:")
