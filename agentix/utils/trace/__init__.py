@@ -137,6 +137,69 @@ def current_span_id() -> str | None:
     return s.span_id if s is not None else None
 
 
+# ── cross-boundary propagation (one agentix.context propagator) ────
+#
+# Tracing is just one consumer of the generic `agentix.utils.context`
+# carrier. This propagator injects the host's current trace_id +
+# parent span on the host side of `c.remote(...)`, and on the worker
+# side restores them as the ambient trace/span so spans opened inside
+# the remote `fn` share the trace and parent under the host's span —
+# the worker's subtree nests into the host's trace tree automatically.
+
+
+class _TracePropagator:
+    """`agentix.context.Propagator` that carries the active trace scope
+    across the sandbox boundary. The carrier knows nothing about spans;
+    all trace specifics live here."""
+
+    key = "trace"
+
+    def inject(self) -> dict[str, Any] | None:
+        t = _current_trace.get()
+        s = _current_span.get()
+        if t is None and s is None:
+            return None
+        trace_id = t.trace_id if t is not None else (s.trace_id if s is not None else None)
+        return {
+            "trace_id": trace_id,
+            "trace_name": t.name if t is not None else None,
+            "trace_metadata": dict(t.metadata) if (t is not None and t.metadata) else None,
+            "parent_span_id": s.span_id if s is not None else None,
+        }
+
+    @contextlib.contextmanager
+    def extract(self, value: Any) -> Iterator[None]:
+        if not isinstance(value, dict):
+            yield
+            return
+        trace_id = value.get("trace_id")
+        resets: list[tuple[contextvars.ContextVar[Any], contextvars.Token[Any]]] = []
+        if trace_id:
+            restored = Trace(
+                trace_id=str(trace_id),
+                name=str(value.get("trace_name") or ""),
+                metadata=dict(value.get("trace_metadata") or {}),
+            )
+            resets.append((_current_trace, _current_trace.set(restored)))
+        parent_span_id = value.get("parent_span_id")
+        if parent_span_id:
+            # A parent-reference placeholder: it is never started/ended
+            # nor fanned to processors. `span()` only reads its id and
+            # trace_id to parent the worker's first real child span.
+            placeholder = Span(
+                span_id=str(parent_span_id),
+                trace_id=str(trace_id or "trace_unbound"),
+                parent_id=None,
+                name="<remote-parent>",
+            )
+            resets.append((_current_span, _current_span.set(placeholder)))
+        try:
+            yield
+        finally:
+            for var, tok in reversed(resets):
+                var.reset(tok)
+
+
 # ── data types ─────────────────────────────────────────────────────
 
 
@@ -535,3 +598,15 @@ def collect(path: Any, *, spans: bool = True, traces: bool = True) -> JsonlProce
 
 
 _atexit.register(shutdown)
+
+
+# Register tracing as a context propagator so the active trace scope
+# rides `c.remote(...)` automatically. Imported here (not at top) to
+# keep `agentix.utils.context` free of any trace dependency.
+from agentix.utils import context as _context  # noqa: E402
+
+try:
+    _context.register_propagator(_TracePropagator())
+except ValueError:
+    # Already registered (module re-import) — registration is idempotent.
+    pass
