@@ -111,7 +111,8 @@ class OpenAIClient:
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise UpstreamError(f"upstream {resp.status_code}: {resp.text[:1000]}", status_code=resp.status_code) from exc
+            msg = f"upstream {resp.status_code}: {resp.text[:1000]}"
+            raise UpstreamError(msg, status_code=resp.status_code) from exc
         value = resp.json()
         if not isinstance(value, dict):
             raise UpstreamError("openai-compatible upstream returned non-object JSON")
