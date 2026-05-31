@@ -20,7 +20,7 @@ import os
 
 from agentix.agents.claude_code import ClaudeCodeArgs
 from agentix.agents.claude_code import run as claude_code_run
-from agentix.bridge import Bridge
+from agentix.bridge import Bridge, OpenAIClient
 from agentix.provider.docker import DockerProvider, DockerProviderConfig
 
 from agentix.provider.base import SandboxConfig
@@ -55,8 +55,10 @@ async def main() -> None:
     args = parse_args()
     configure_logging(default_context="host")
 
-    # The bridge is the /abridge consumer + upstream config + proxy lifecycle.
-    bridge = Bridge(base_url=args.base_url, api_key=os.environ["OPENAI_API_KEY"], model=args.model, timeout=180)
+    # Bridge ferries + captures; the Client makes the actual provider call.
+    bridge = Bridge(OpenAIClient(
+        base_url=args.base_url, api_key=os.environ["OPENAI_API_KEY"], model=args.model, timeout=180,
+    ))
     provider = DockerProvider(DockerProviderConfig(
         container_engine=args.container_engine, run_args=args.run_args, network=args.network,
     ))

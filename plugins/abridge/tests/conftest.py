@@ -19,7 +19,7 @@ from typing import Any
 import agentix.bridge.proxy as proxy_mod
 import pytest
 import pytest_asyncio
-from agentix.bridge import Bridge, InMemoryStore, start_proxy, stop_proxy
+from agentix.bridge import Bridge, InMemoryStore, OpenAIClient, start_proxy, stop_proxy
 
 # ── fake upstream OpenAI-compatible server ────────────────────────────────
 
@@ -113,9 +113,7 @@ async def wired(fake_upstream: str, monkeypatch):
 
     store = InMemoryStore()
     host = Bridge(
-        base_url=fake_upstream,
-        api_key="test-key",
-        model="upstream-model",
+        OpenAIClient(base_url=fake_upstream, api_key="test-key", model="upstream-model"),
         store=store,
     )
 

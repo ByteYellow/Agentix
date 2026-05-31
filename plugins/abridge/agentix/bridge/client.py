@@ -1,15 +1,14 @@
-"""Host-side OpenAI-compatible client + SIO consumer.
+"""Host-side abridge: the `/abridge` consumer + a pluggable upstream `Client`.
 
-Counterpart to `proxy.py`. The proxy in the sandbox emits
-`llm_call` requests on `/abridge` carrying an OpenAI Chat Completions
-body; this module fires that body against a real OpenAI-compatible
-endpoint (OpenAI, Azure OpenAI, vLLM, Together, Anyscale, …) and
-returns the JSON response. It also receives fire-and-forget
-`completion_record` events and pushes them into an `InMemoryStore`
-that the user reads after the run.
+The proxy in the sandbox emits `llm_call` requests on `/abridge` carrying an
+OpenAI Chat Completions body. `Bridge` ferries that to the host, calls a
+user-supplied `Client` to reach the actual model provider, returns the
+response, and captures every call into an `InMemoryStore`.
 
-Only the OpenAI Chat Completions family is wired today. Anthropic,
-Gemini, etc. become host clients as they grow up — see ROADMAP.
+`Bridge` itself knows nothing about endpoints, keys, or models — it just calls
+`client.complete(body)`. The default `OpenAIClient` posts to an OpenAI-compatible
+endpoint; swap in your own (litellm, an SGLang gateway, a replay client) by
+implementing the `Client` protocol.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
@@ -32,26 +31,41 @@ from .storage import CompletionRecord, InMemoryStore, TokenUsage
 
 logger = logging.getLogger("agentix.bridge.client")
 
-
 _OPENAI_CHAT_PATH = "/chat/completions"
 
 UpstreamHook = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, Any]]
-"""Optional async callable that can rewrite the body before it leaves the host."""
+"""Optional callable that rewrites the body before it leaves the host."""
 
 
-class Bridge(AsyncClientNamespace):
-    """Host-side abridge: the `/abridge` consumer, the upstream config, and
-    the in-sandbox proxy lifecycle, in one object.
+class UpstreamError(Exception):
+    """Raised by a `Client` when the provider call fails. `Bridge` maps it to an
+    error reply (carrying `status_code`) that the sandbox agent receives in place
+    of a result — so a failed call doesn't crash the bridge."""
 
-    Construct it with the upstream endpoint, `await bridge.start_proxy(sandbox)`
-    to register + bring up the in-sandbox service, then point your agent's
-    `base_url` at `bridge.get_base_url()`. Every captured call lands in `store`,
-    grouped by `session_id`.
+    def __init__(self, message: str, *, status_code: int = 502) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
 
-    Parameters mirror the openai SDK: `base_url` (e.g. `https://api.openai.com/v1`,
-    `http://vllm:8000/v1`); `api_key` is the bearer token; `model` optionally
-    rewrites whatever model the sandbox sent so agents share one upstream.
-    `request_hook` is the one-shot hook to rewrite the OpenAI body before the wire.
+
+@runtime_checkable
+class Client(Protocol):
+    """Sends an OpenAI Chat Completions body to a model provider and returns the
+    OpenAI-format response dict. `Bridge` owns transport + capture; the `Client`
+    owns the actual provider call. `headers` carry the rollout identity
+    (`x-session-id` / `x-request-id`) for gateways that group by it. Raise
+    `UpstreamError(msg, status_code=...)` on provider failure."""
+
+    async def complete(
+        self, body: dict[str, Any], *, headers: dict[str, str] | None = None
+    ) -> dict[str, Any]: ...
+
+
+class OpenAIClient:
+    """Default `Client`: POST the body to an OpenAI-compatible `/chat/completions`.
+
+    `model` rewrites the body's model so different agents share one upstream;
+    `extra_body` is merged in; `request_hook` rewrites the body before the wire.
     """
 
     def __init__(
@@ -63,16 +77,66 @@ class Bridge(AsyncClientNamespace):
         extra_body: dict[str, Any] | None = None,
         timeout: float = 120.0,
         request_hook: UpstreamHook | None = None,
-        store: InMemoryStore | None = None,
-        session_id: str | None = None,
     ) -> None:
-        super().__init__(NAMESPACE)
         self._base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY") or ""
         self._model = model
         self._extra_body = extra_body or {}
         self._timeout = timeout
         self._request_hook = request_hook
+
+    async def complete(
+        self, body: dict[str, Any], *, headers: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        out = dict(body)
+        if self._model:
+            out["model"] = self._model
+        if self._extra_body:
+            out.update(self._extra_body)
+        if self._request_hook is not None:
+            result = self._request_hook(out)
+            if asyncio.iscoroutine(result):
+                result = await result
+            if isinstance(result, dict):
+                out = result
+
+        request_headers = {
+            "authorization": f"Bearer {self._api_key}",
+            "content-type": "application/json",
+            "accept": "application/json",
+            **(headers or {}),
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.post(f"{self._base_url}{_OPENAI_CHAT_PATH}", headers=request_headers, json=out)
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise UpstreamError(f"upstream {resp.status_code}: {resp.text[:1000]}", status_code=resp.status_code) from exc
+        value = resp.json()
+        if not isinstance(value, dict):
+            raise UpstreamError("openai-compatible upstream returned non-object JSON")
+        return value
+
+
+class Bridge(AsyncClientNamespace):
+    """Host-side abridge: the `/abridge` consumer + in-sandbox proxy lifecycle +
+    capture. Bridge only ferries and captures — it calls `client.complete(...)`
+    to reach the model provider.
+
+    `await bridge.start_proxy(sandbox)` registers + brings up the in-sandbox
+    service; point your agent's `base_url` at `bridge.get_base_url()`. Every
+    captured call lands in `store`, grouped by `session_id`.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        *,
+        store: InMemoryStore | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        super().__init__(NAMESPACE)
+        self._client = client
         self.store: InMemoryStore = store if store is not None else InMemoryStore()
         self.session_id = session_id or uuid.uuid4().hex
         self._proxy: ProxyHandle | None = None
@@ -107,16 +171,9 @@ class Bridge(AsyncClientNamespace):
     # ── SIO dispatch ───────────────────────────────────────────────────
 
     async def on_llm_call(self, envelope: dict[str, Any]) -> None:
-        """Round-trip request handler for `llm_call`.
-
-        The sandbox's `Namespace.request(...)` wraps the application
-        payload as `{"request_id": <sio>, "data": <payload>}` and
-        expects a reply on `llm_call:result` carrying
-        `{"request_id": <sio>, "value": ...}` (or `llm_call:error`).
-        We reply with success and put any upstream error inside `value`
-        so the caller can branch without raising. This keeps capture
-        records consistent in both paths.
-        """
+        """Round-trip handler for `llm_call`: hand the body to the client, reply
+        with the response (or an error `value` so the agent can branch without
+        the bridge raising)."""
         if not isinstance(envelope, dict):
             return
         sio_request_id = envelope.get("request_id")
@@ -134,28 +191,19 @@ class Bridge(AsyncClientNamespace):
             await self._reply_value(sio_request_id, _err_value("upstream_body must be a JSON object", 400))
             return
 
-        upstream_body = await self._apply_overrides(upstream_body)
         forward_headers = _trace_headers(payload)
-
         try:
-            response = await self._post_openai(upstream_body, headers=forward_headers)
+            response = await self._client.complete(upstream_body, headers=forward_headers)
             await self._reply_value(sio_request_id, {"response": response})
-        except httpx.HTTPStatusError as exc:
-            text = exc.response.text[:1000]
-            await self._reply_value(
-                sio_request_id,
-                _err_value(f"upstream {exc.response.status_code}: {text}", exc.response.status_code),
-            )
+        except UpstreamError as exc:
+            await self._reply_value(sio_request_id, _err_value(exc.message, exc.status_code))
         except Exception as exc:  # noqa: BLE001 - report any failure back to the agent
             await self._reply_value(sio_request_id, _err_value(f"{type(exc).__name__}: {exc}", 502))
 
     async def on_completion_record(self, payload: dict[str, Any]) -> None:
-        """Fire-and-forget capture sink. Stores into `self.store`.
-
-        `emit()` from the sandbox `Namespace` does not wrap the
-        payload in a `request_id/data` envelope; we receive the
-        record dict directly.
-        """
+        """Fire-and-forget capture sink. `emit()` from the sandbox `Namespace`
+        does not wrap the payload in a `request_id/data` envelope; we receive
+        the record dict directly."""
         try:
             record = _record_from_payload(payload)
         except Exception:
@@ -163,45 +211,8 @@ class Bridge(AsyncClientNamespace):
             return
         self.store.add(record)
 
-    # ── helpers ────────────────────────────────────────────────────────
-
-    async def _apply_overrides(self, body: dict[str, Any]) -> dict[str, Any]:
-        out = dict(body)
-        if self._model:
-            out["model"] = self._model
-        if self._extra_body:
-            out.update(self._extra_body)
-        if self._request_hook is not None:
-            result = self._request_hook(out)
-            if asyncio.iscoroutine(result):
-                result = await result
-            if isinstance(result, dict):
-                out = result
-        return out
-
-    async def _post_openai(
-        self, body: dict[str, Any], *, headers: dict[str, str] | None = None
-    ) -> dict[str, Any]:
-        url = f"{self._base_url}{_OPENAI_CHAT_PATH}"
-        request_headers = {
-            "authorization": f"Bearer {self._api_key}",
-            "content-type": "application/json",
-            "accept": "application/json",
-            **(headers or {}),
-        }
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(url, headers=request_headers, json=body)
-        resp.raise_for_status()
-        value = resp.json()
-        if not isinstance(value, dict):
-            raise ValueError("openai-compatible upstream returned non-object JSON")
-        return value
-
     async def _reply_value(self, sio_request_id: str, value: dict[str, Any]) -> None:
-        await self.emit(
-            f"{REQUEST_EVENT}:result",
-            {"request_id": sio_request_id, "value": value},
-        )
+        await self.emit(f"{REQUEST_EVENT}:result", {"request_id": sio_request_id, "value": value})
 
 
 def _err_value(message: str, status: int) -> dict[str, Any]:
@@ -209,12 +220,11 @@ def _err_value(message: str, status: int) -> dict[str, Any]:
 
 
 def _trace_headers(payload: dict[str, Any]) -> dict[str, str]:
-    """Headers that propagate the rollout identity to the upstream.
+    """Headers that propagate the rollout identity to the client/provider.
 
-    The upstream may be OpenAI/OpenRouter (which ignore unknown headers)
-    or a separate gateway (e.g. an SGLang wrapper) that groups its own
-    token-level trajectory by `session_id`. abridge does not know which;
-    it just forwards the ids it stamped.
+    OpenAI/OpenRouter ignore unknown headers; a separate gateway (e.g. an SGLang
+    wrapper) can group its own token-level trajectory by `session_id`. abridge
+    just forwards the ids it stamped.
     """
     headers: dict[str, str] = {}
     session_id = payload.get("session_id")
@@ -259,4 +269,4 @@ def _record_from_payload(payload: dict[str, Any]) -> CompletionRecord:
     )
 
 
-__all__ = ["Bridge", "UpstreamHook"]
+__all__ = ["Bridge", "Client", "OpenAIClient", "UpstreamError", "UpstreamHook"]

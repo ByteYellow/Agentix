@@ -8,13 +8,13 @@ turned into a `/trace` span. The agent code is never touched — you just
 point its `base_url` at the bridge's in-sandbox service URL.
 
 ```python
-from agentix.bridge import Bridge
+from agentix.bridge import Bridge, OpenAIClient
 
-bridge = Bridge(
+bridge = Bridge(OpenAIClient(
     base_url="https://api.openai.com/v1",   # or your gateway / vLLM / OpenRouter
     api_key=os.environ["OPENAI_API_KEY"],
     model="gpt-4o-mini",                    # pin the upstream model (optional)
-)
+))
 async with provider.session(cfg) as sandbox:
     await bridge.start_proxy(sandbox, family="anthropic")   # registers + starts the proxy
     # the agent runs with a plain remote; point its base_url at the service:
@@ -30,7 +30,7 @@ the same `session_id`. See `ROADMAP.md` for planned extensions.
 
 from __future__ import annotations
 
-from .client import Bridge, UpstreamHook
+from .client import Bridge, Client, OpenAIClient, UpstreamError, UpstreamHook
 from .detection import ApiFamily, detect
 from .proxy import (
     NAMESPACE,
@@ -55,12 +55,15 @@ __all__ = [
     "NAMESPACE",
     "ApiFamily",
     "Bridge",
+    "Client",
     "CompletionRecord",
     "InMemoryStore",
+    "OpenAIClient",
     "ProxyHandle",
     "RECORD_EVENT",
     "REQUEST_EVENT",
     "TokenUsage",
+    "UpstreamError",
     "UpstreamHook",
     "__version__",
     "detect",
