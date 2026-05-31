@@ -48,12 +48,29 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--network", default=None, help="container network mode, e.g. `host`")
     p.add_argument("--run-arg", action="append", default=[], dest="run_args", help="extra run arg (repeatable)")
     p.add_argument("--instruction", default=DEFAULT_INSTRUCTION)
+    # Optional OTLP export of the captured /trace spans (LangSmith / Langfuse / any
+    # OTLP backend — only the endpoint + auth headers differ).
+    p.add_argument("--otlp-endpoint", default=os.getenv("OTLP_TRACES_ENDPOINT"),
+                   help="OTLP/HTTP traces URL, e.g. https://api.smith.langchain.com/otel/v1/traces")
+    p.add_argument("--otlp-header", action="append", default=[], dest="otlp_headers", metavar="K=V",
+                   help="OTLP header (repeatable), e.g. x-api-key=lsv2_... or Langsmith-Project=demo")
     return p.parse_args()
+
+
+def _install_otlp(endpoint: str, header_pairs: list[str]) -> None:
+    from agentix.utils.trace.otel import OTelTraceProcessor
+
+    from agentix.utils import trace
+
+    headers = dict(h.split("=", 1) for h in header_pairs)
+    trace.add_processor(OTelTraceProcessor(endpoint=endpoint, headers=headers))
 
 
 async def main() -> None:
     args = parse_args()
     configure_logging(default_context="host")
+    if args.otlp_endpoint:
+        _install_otlp(args.otlp_endpoint, args.otlp_headers)  # captured /trace spans -> OTLP backend
 
     # Bridge ferries + captures; the Client makes the actual provider call.
     bridge = Bridge(OpenAIClient(
