@@ -13,6 +13,7 @@ runtime.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import stat
@@ -204,6 +205,29 @@ def test_extract_bundle_skips_when_runtime_already_present(tmp_path: Path) -> No
     sentinel.write_text("MUTATED")
     _extract_bundle(bundle, target)
     assert sentinel.read_text() == "MUTATED"
+
+
+def test_extract_bundle_rejects_path_traversal_member(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle.tar"
+    bundle_root = tmp_path / "bundle-root"
+    runtime = bundle_root / "nix" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "bootstrap.sh").write_text("#!/bin/sh\necho fake\n")
+
+    with tarfile.open(bundle, "w") as tar:
+        tar.add(bundle_root / "nix", arcname="nix")
+        data = b"owned"
+        info = tarfile.TarInfo("nix/../../escape.txt")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+
+    target = tmp_path / "cache" / "bundle"
+    with pytest.raises(RuntimeError, match="unsafe member"):
+        _extract_bundle(bundle, target)
+
+    assert not (tmp_path / "cache" / "escape.txt").exists()
+    assert not (tmp_path / "escape.txt").exists()
+    assert not (target / "nix" / "runtime" / "bootstrap.sh").exists()
 
 
 @pytest.mark.anyio
